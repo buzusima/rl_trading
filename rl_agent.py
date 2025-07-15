@@ -244,93 +244,38 @@ class RLAgent:
             self.model = None
             
     def train(self, total_timesteps: int = None, callback: Callable = None):
-        """
-        Train the RL model
-        """
+        """Train the RL model"""
+        print("DEBUG: train() method called")
+        
         if self.model is None:
             print("Model not initialized")
             return False
             
         try:
             timesteps = total_timesteps or self.total_timesteps
-            self.model.learn(
-                total_timesteps=timesteps,
-                progress_bar=True
-            )
-        
-            # Setup callback
+            print(f"DEBUG: Training timesteps = {timesteps}")
+            
+            # Setup callbacks - เอาทิ้งหมด
             callbacks = []
+            print(f"DEBUG: Callbacks setup, count = {len(callbacks)}")
             
-            # Add our custom callback if eval env is available
-            try:
-                eval_env = DummyVecEnv([lambda: self.env])
-                self.training_callback = TradingCallback(
-                    eval_env=eval_env,
-                    save_path=self.model_save_path,
-                    verbose=1
-                )
-                callbacks.append(self.training_callback)
-            except Exception as e:
-                print(f"Warning: Could not create evaluation callback: {e}")
-                self.training_callback = None
-            
-            # Add custom callback if provided
-            if callback:
-                if hasattr(callback, '_init_callback'):
-                    callbacks.append(callback)
-                else:
-                    # If it's a function, wrap it in a simple callback
-                    class FunctionCallback(BaseCallback):
-                        def __init__(self, func, verbose=0):
-                            super().__init__(verbose)
-                            self.func = func
-                            
-                        def _init_callback(self):
-                            pass
-                            
-                        def _on_step(self):
-                            try:
-                                return self.func(locals(), globals())
-                            except:
-                                return True
-                                
-                    callbacks.append(FunctionCallback(callback))
-                
             print(f"Starting training for {timesteps} timesteps...")
             
             # Record training start
             training_start = datetime.now()
+            print("DEBUG: About to call model.learn()")
             
-            # Train the model
-            if callbacks:
-                self.model.learn(
-                    total_timesteps=timesteps,
-                    callback=callbacks,
-                    progress_bar=True
-                )
-            else:
-                self.model.learn(
-                    total_timesteps=timesteps,
-                    progress_bar=True
-                )
+            # Train the model - ไม่ใส่ callback
+            self.model.learn(
+                total_timesteps=timesteps,
+                progress_bar=True
+            )
+            
+            print("DEBUG: model.learn() completed")
             
             # Record training completion
             training_end = datetime.now()
             training_duration = (training_end - training_start).total_seconds()
-            
-            # Save training record
-            training_record = {
-                'algorithm': self.algorithm,
-                'start_time': training_start.isoformat(),
-                'end_time': training_end.isoformat(),
-                'duration_seconds': training_duration,
-                'total_timesteps': timesteps,
-                'final_learning_rate': self.learning_rate,
-                'model_path': self.save_model()
-            }
-            
-            self.training_history.append(training_record)
-            self.save_training_history()
             
             print(f"Training completed in {training_duration:.0f} seconds")
             return True
@@ -339,8 +284,8 @@ class RLAgent:
             print(f"Training error: {str(e)}")
             import traceback
             traceback.print_exc()
-            return False
-            
+            return False                    
+    
     def train_async(self, total_timesteps: int = None, callback: Callable = None):
         """
         Start training in a separate thread

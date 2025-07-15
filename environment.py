@@ -34,9 +34,9 @@ class TradingEnvironment(gym.Env):
         # Account info: balance, equity, margin, etc. (10 features)
         # Recovery info: recovery level, drawdown, etc. (10 features)
         self.observation_space = spaces.Box(
-            low=np.array([-10.0] * 90, dtype=np.float32), 
-            high=np.array([10.0] * 90, dtype=np.float32), 
-            shape=(90,),  
+            low=np.array([-10.0] * 92, dtype=np.float32), 
+            high=np.array([10.0] * 92, dtype=np.float32), 
+            shape=(92,),  
             dtype=np.float32
         )       
         # Action space: [action_type, lot_multiplier, recovery_action]
@@ -136,30 +136,35 @@ class TradingEnvironment(gym.Env):
             current_price = self._get_current_price()
             if current_price is None:
                 return -1.0  # Penalty for invalid market data
-                
-            # Check for profit taking opportunities FIRST
-            profit_signals = self.recovery_engine.check_profit_opportunities(
-                self.mt5_interface, self.symbol
-            )
             
-            if profit_signals:
-                executed_profits = self.recovery_engine.execute_profit_taking(
-                    self.mt5_interface, profit_signals
+            # Check if in training mode
+            is_training_mode = self.config.get('training_mode', True)
+            
+            if not is_training_mode:
+                # Live trading mode - execute real orders
+                # Check for profit taking opportunities FIRST
+                profit_signals = self.recovery_engine.check_profit_opportunities(
+                    self.mt5_interface, self.symbol
                 )
                 
-                # Reward for successful profit taking
-                if executed_profits:
-                    total_profit_taken = sum(action.get('profit', 0) for action in executed_profits)
-                    reward += total_profit_taken / 50.0  # Scale reward
+                if profit_signals:
+                    executed_profits = self.recovery_engine.execute_profit_taking(
+                        self.mt5_interface, profit_signals
+                    )
                     
-            # Check smart profit strategy
-            smart_profit_taken = self.recovery_engine.smart_profit_strategy(
-                self.mt5_interface, self.symbol
-            )
-            
-            if smart_profit_taken:
-                reward += 3.0  # Bonus for smart profit taking
+                    # Reward for successful profit taking
+                    if executed_profits:
+                        total_profit_taken = sum(action.get('profit', 0) for action in executed_profits)
+                        reward += total_profit_taken / 50.0  # Scale reward
+                        
+                # Check smart profit strategy
+                smart_profit_taken = self.recovery_engine.smart_profit_strategy(
+                    self.mt5_interface, self.symbol
+                )
                 
+                if smart_profit_taken:
+                    reward += 3.0  # Bonus for smart profit taking
+            
             # Calculate position size
             base_lot_size = self.initial_lot_size
             if self.recovery_active:
@@ -169,44 +174,77 @@ class TradingEnvironment(gym.Env):
             
             lot_size = base_lot_size * lot_multiplier
             lot_size = max(0.01, min(lot_size, 10.0))  # Limit lot size
-            
+            # Round to valid MT5 lot size (0.01 increments)
+            lot_size = round(lot_size / 0.01) * 0.01
+            lot_size = max(0.01, lot_size)  # Ensure minimum 0.01
+
             # Execute action based on type
             if action_type == 0:  # Hold
                 reward += self._calculate_hold_reward()
                 
             elif action_type == 1:  # Buy
-                success = self.mt5_interface.place_order(
-                    symbol=self.symbol,
-                    order_type='buy',
-                    volume=lot_size,
-                    price=current_price
-                )
+                if is_training_mode:
+                    # Training mode - simulate
+                    success = True
+                    print(f"SIMULATED BUY: {lot_size} {self.symbol} at {current_price}")
+                else:
+                    # Live mode - real order
+                    success = self.mt5_interface.place_order(
+                        symbol=self.symbol,
+                        order_type='buy',
+                        volume=lot_size,
+                        price=current_price
+                    )
                 reward += self._calculate_trade_reward(success, 'buy', lot_size)
                 
             elif action_type == 2:  # Sell
-                success = self.mt5_interface.place_order(
-                    symbol=self.symbol,
-                    order_type='sell',
-                    volume=lot_size,
-                    price=current_price
-                )
+                if is_training_mode:
+                    # Training mode - simulate
+                    success = True
+                    print(f"SIMULATED SELL: {lot_size} {self.symbol} at {current_price}")
+                else:
+                    # Live mode - real order
+                    success = self.mt5_interface.place_order(
+                        symbol=self.symbol,
+                        order_type='sell',
+                        volume=lot_size,
+                        price=current_price
+                    )
                 reward += self._calculate_trade_reward(success, 'sell', lot_size)
                 
             elif action_type == 3:  # Close all positions (PROFIT TAKING)
-                success = self.mt5_interface.close_all_positions(self.symbol)
+                if is_training_mode:
+                    # Training mode - simulate
+                    success = True
+                    print(f"SIMULATED CLOSE ALL: {self.symbol}")
+                else:
+                    # Live mode - real close
+                    success = self.mt5_interface.close_all_positions(self.symbol)
                 reward += self._calculate_close_reward(success)
                 
-                # Extra reward if closing with profit
-                current_pnl = self._get_current_pnl()
-                if current_pnl > 0:
-                    reward += 2.0 + (current_pnl / 100.0)  # Bonus for profitable close
+                # Extra reward if closing with profit (simulated in training)
+                if is_training_mode:
+                    # Simulate current PnL for training
+                    simulated_pnl = reward * 10  # Simple simulation
+                    if simulated_pnl > 0:
+                        reward += 2.0 + (simulated_pnl / 100.0)
+                else:
+                    current_pnl = self._get_current_pnl()
+                    if current_pnl > 0:
+                        reward += 2.0 + (current_pnl / 100.0)  # Bonus for profitable close
                     
             elif action_type == 4:  # Hedge
-                success = self._execute_hedge_action(lot_size)
+                if is_training_mode:
+                    # Training mode - simulate
+                    success = True
+                    print(f"SIMULATED HEDGE: {lot_size} {self.symbol}")
+                else:
+                    # Live mode - real hedge
+                    success = self._execute_hedge_action(lot_size)
                 reward += self._calculate_hedge_reward(success)
-                
-            # Execute recovery action if needed
-            if recovery_action > 0 and self._should_activate_recovery():
+            
+            # Execute recovery action if needed (only in live mode)
+            if not is_training_mode and recovery_action > 0 and self._should_activate_recovery():
                 self._execute_recovery_action(recovery_action)
                 
             # Update recovery status
@@ -272,25 +310,25 @@ class TradingEnvironment(gym.Env):
         
     def _get_observation(self):
         """Get current environment observation"""
-        observation = np.zeros(90, dtype=np.float32)
+        observation = np.zeros(92, dtype=np.float32)
         
         try:
-            # Market data features (50 features)
+            # Market data features (51 features แทน 50)
             market_features = self._get_market_features()
-            observation[:50] = market_features
-            
-            # Position features (20 features)
+            observation[:51] = market_features  # เปลี่ยนจาก 50 เป็น 51
+
+            # Position features (20 features) 
             position_features = self._get_position_features()
-            observation[50:70] = position_features
-            
+            observation[51:71] = position_features  # เปลี่ยน index
+
             # Account features (10 features)
-            account_features = self._get_account_features()
-            observation[70:80] = account_features
-            
+            account_features = self._get_account_features()  
+            observation[71:81] = account_features  # เปลี่ยน index
+
             # Recovery features (10 features)
             recovery_features = self._get_recovery_features()
-            observation[80:90] = recovery_features
-            
+            observation[81:91] = recovery_features  # เปลี่ยน index
+
         except Exception as e:
             print(f"Error getting observation: {e}")
             # Return zeros if error occurs
@@ -299,7 +337,7 @@ class TradingEnvironment(gym.Env):
         
     def _get_market_features(self):
         """Extract market-related features"""
-        features = np.zeros(50)
+        features = np.zeros(51)
         
         if len(self.market_data_cache) < 20:  # Reduced minimum requirement
             return features
@@ -323,13 +361,16 @@ class TradingEnvironment(gym.Env):
             
             # Basic OHLCV features (normalized) - SAFE VERSION
             if len(df) > 1 and df['close'].std() > 0:
-                features[0] = float((df['close'].iloc[-1] - df['close'].mean()) / df['close'].std())
-                features[1] = float((df['high'].iloc[-1] - df['high'].mean()) / df['high'].std())
-                features[2] = float((df['low'].iloc[-1] - df['low'].mean()) / df['low'].std())
+                close_std = df['close'].std()
+                high_std = df['high'].std() 
+                low_std = df['low'].std()
+                
+                features[0] = float((df['close'].iloc[-1] - df['close'].mean()) / close_std)
+                features[1] = float((df['high'].iloc[-1] - df['high'].mean()) / high_std) if high_std > 0 else 0.0
+                features[2] = float((df['low'].iloc[-1] - df['low'].mean()) / low_std) if low_std > 0 else 0.0
                 
                 if 'volume' in df.columns and df['volume'].std() > 0:
-                    features[3] = float((df['volume'].iloc[-1] - df['volume'].mean()) / df['volume'].std())
-                    
+                    features[3] = float((df['volume'].iloc[-1] - df['volume'].mean()) / df['volume'].std())                    
             # Simple technical indicators (4-13)
             features[4:14] = self._safe_technical_indicators(df)
             
@@ -343,7 +384,7 @@ class TradingEnvironment(gym.Env):
             features[34:44] = self._safe_sr_features(df)
             
             # Time-based features (44-49)
-            features[44:50] = self._calculate_time_features()
+            features[44:51] = self._calculate_time_features()
             
             # Final safety check
             features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -368,9 +409,9 @@ class TradingEnvironment(gym.Env):
                 last_close = float(df['close'].iloc[-1])
                 last_sma = float(sma_10.iloc[-1])
                 
-                if last_sma > 0 and not np.isnan(last_sma):
-                    indicators[0] = (last_close - last_sma) / last_sma
-                    
+            if last_sma > 0 and not np.isnan(last_sma):
+                indicators[0] = (last_close - last_sma) / last_sma                    
+            
             # Price change ratios
             if len(df) >= 2:
                 price_change = float(df['close'].iloc[-1] - df['close'].iloc[-2])
@@ -378,7 +419,16 @@ class TradingEnvironment(gym.Env):
                 
                 if base_price > 0:
                     indicators[1] = price_change / base_price
-                    
+            # Safe high/low features
+            if len(df) > 1:
+                high_std = df['high'].std()
+                low_std = df['low'].std()
+                
+                if high_std > 0 and not np.isnan(high_std):
+                    indicators[1] = (df['high'].iloc[-1] - df['high'].mean()) / high_std
+                
+                if low_std > 0 and not np.isnan(low_std):
+                    indicators[2] = (df['low'].iloc[-1] - df['low'].mean()) / low_std        
             # High-Low ratio
             last_high = float(df['high'].iloc[-1])
             last_low = float(df['low'].iloc[-1])
@@ -794,7 +844,7 @@ class TradingEnvironment(gym.Env):
         
     def _calculate_time_features(self):
         """Calculate time-based features"""
-        features = np.zeros(6)
+        features = np.zeros(7)
         
         try:
             now = datetime.now()

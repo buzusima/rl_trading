@@ -434,8 +434,13 @@ class TradingGUI:
             return
             
         try:
+            print("DEBUG: Starting training...")
+            
             # Initialize training environment
+            print("DEBUG: Creating environment...")
             self.trading_env = TradingEnvironment(self.mt5_interface, self.recovery_engine, self.config)
+            
+            print("DEBUG: Creating RL agent...")
             self.rl_agent = RLAgent(self.trading_env, self.config)
             
             self.is_training = True
@@ -443,17 +448,73 @@ class TradingGUI:
             self.stop_training_btn.config(state='normal')
             self.pause_training_btn.config(state='normal')
             
-            # Start training thread
-            self.training_thread = threading.Thread(target=self.training_loop)
+            print("DEBUG: Starting training thread...")
+            
+            # Start training thread with callback
+            self.training_thread = threading.Thread(target=self.training_loop_with_callback)
             self.training_thread.daemon = True
             self.training_thread.start()
             
             self.log_message("Training started")
             
         except Exception as e:
+            print(f"DEBUG: Error in start_training: {str(e)}")
             self.log_message(f"Error starting training: {str(e)}")
             messagebox.showerror("Training Error", f"Error: {str(e)}")
+
+    def training_loop_with_callback(self):
+        try:
+            print("DEBUG: Inside training_loop_with_callback")
             
+            # Create callback for GUI updates
+            def gui_callback(step, total_steps, reward=None):
+                progress = (step / total_steps) * 100
+                
+                # Update progress bar
+                self.root.after(0, lambda: self.progress_bar.config(value=progress))
+                self.root.after(0, lambda: self.progress_label.config(
+                    text=f"Training: {step:,}/{total_steps:,} ({progress:.1f}%)"
+                ))
+                
+                # Update statistics
+                stats_text = f"Step: {step:,}/{total_steps:,}\n"
+                stats_text += f"Progress: {progress:.1f}%\n"
+                if reward:
+                    stats_text += f"Current Reward: {reward:.4f}\n"
+                stats_text += f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                stats_text += "=" * 40 + "\n"
+                
+                self.root.after(0, lambda: self.stats_text.insert(tk.END, stats_text))
+                self.root.after(0, lambda: self.stats_text.see(tk.END))
+            
+            # Start training with callback
+            success = self.rl_agent.train(
+                total_timesteps=self.training_steps_var.get(),
+                callback=gui_callback
+            )
+            
+            print(f"DEBUG: train returned: {success}")
+            
+            if success:
+                self.log_message("Training completed successfully")
+                self.root.after(0, lambda: self.progress_bar.config(value=100))
+                self.root.after(0, lambda: self.progress_label.config(text="Training completed!"))
+            else:
+                self.log_message("Training failed - check logs")
+                self.root.after(0, lambda: self.progress_label.config(text="Training failed"))
+                
+        except Exception as e:
+            print(f"DEBUG: training_loop error: {str(e)}")
+            self.log_message(f"Training error: {str(e)}")
+            self.root.after(0, lambda: self.progress_label.config(text="Training error"))
+            
+        finally:
+            print("DEBUG: training_loop finished")
+            self.is_training = False
+            self.root.after(0, lambda: self.start_training_btn.config(state='normal'))
+            self.root.after(0, lambda: self.stop_training_btn.config(state='disabled'))
+            self.root.after(0, lambda: self.pause_training_btn.config(state='disabled'))
+
     def stop_training(self):
         self.is_training = False
         self.start_training_btn.config(state='normal')
@@ -488,26 +549,40 @@ class TradingGUI:
                 
     def training_loop(self):
         try:
-            # Use simple training method instead
-            success = self.rl_agent.train_simple(
+            print("DEBUG: Inside training_loop")
+            
+            # Update GUI แสดงว่าเริ่มเทรน
+            self.root.after(0, lambda: self.progress_label.config(text="Training in progress..."))
+            self.root.after(0, lambda: self.progress_bar.config(value=1))
+            
+            print("DEBUG: Calling train...")
+            success = self.rl_agent.train(
                 total_timesteps=self.training_steps_var.get()
             )
             
+            print(f"DEBUG: train returned: {success}")
+            
             if success:
                 self.log_message("Training completed successfully")
+                # Update progress to 100%
+                self.root.after(0, lambda: self.progress_bar.config(value=100))
+                self.root.after(0, lambda: self.progress_label.config(text="Training completed!"))
             else:
                 self.log_message("Training failed - check logs")
+                self.root.after(0, lambda: self.progress_label.config(text="Training failed"))
                 
         except Exception as e:
+            print(f"DEBUG: training_loop error: {str(e)}")
             self.log_message(f"Training error: {str(e)}")
+            self.root.after(0, lambda: self.progress_label.config(text="Training error"))
             
         finally:
-            # Reset training state
+            print("DEBUG: training_loop finished")
             self.is_training = False
             self.root.after(0, lambda: self.start_training_btn.config(state='normal'))
             self.root.after(0, lambda: self.stop_training_btn.config(state='disabled'))
             self.root.after(0, lambda: self.pause_training_btn.config(state='disabled'))
-            
+
     def training_callback(self, locals_dict, globals_dict):
         # Update training progress
         if 'self' in locals_dict:
@@ -664,7 +739,7 @@ class TradingGUI:
         """Reset to default values including profit settings"""
         # Reset trading parameters
         self.symbol_var.set('XAUUSD')
-        
+
         self.lot_size_var.set(0.01)
         self.max_positions_var.set(10)
         self.martingale_mult_var.set(2.0)

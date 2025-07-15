@@ -15,10 +15,14 @@ class TradingEnvironment(gym.Env):
     def __init__(self, mt5_interface, recovery_engine, config):
         super(TradingEnvironment, self).__init__()
         
+        self.simulated_positions = []
+        self.simulated_balance = 5000
+        self.simulated_equity = 5000
+        self.last_price = None
+
         self.mt5_interface = mt5_interface
         self.recovery_engine = recovery_engine
         self.config = config
-        
         # Trading parameters
         self.symbol = config.get('symbol', 'XAUUSD')
         self.initial_lot_size = config.get('initial_lot_size', 0.01)
@@ -69,7 +73,7 @@ class TradingEnvironment(gym.Env):
         # Performance metrics
         self.total_trades = 0
         self.winning_trades = 0
-        
+        self.simulated_positions = []  # เก็บ position จำลอง
     def reset(self, seed=None, options=None):
         """Reset the environment to initial state"""
         super().reset(seed=seed)
@@ -180,13 +184,17 @@ class TradingEnvironment(gym.Env):
 
             # Execute action based on type
             if action_type == 0:  # Hold
-                reward += self._calculate_hold_reward()
-                
+                if is_training_mode:
+                    reward += self._calculate_simulated_hold_reward()
+                else:
+                    reward += self._calculate_hold_reward()
+                    
             elif action_type == 1:  # Buy
                 if is_training_mode:
-                    # Training mode - simulate
+                    # Training mode - simulate with REAL reward calculation
                     success = True
-                    print(f"SIMULATED BUY: {lot_size} {self.symbol} at {current_price}")
+                    reward += self._calculate_simulated_trade_reward('buy', lot_size, current_price)
+                    print(f"SIMULATED BUY: {lot_size} {self.symbol} at {current_price:.2f}, Reward: {reward:.3f}")
                 else:
                     # Live mode - real order
                     success = self.mt5_interface.place_order(
@@ -195,13 +203,14 @@ class TradingEnvironment(gym.Env):
                         volume=lot_size,
                         price=current_price
                     )
-                reward += self._calculate_trade_reward(success, 'buy', lot_size)
-                
+                    reward += self._calculate_trade_reward(success, 'buy', lot_size)
+                    
             elif action_type == 2:  # Sell
                 if is_training_mode:
-                    # Training mode - simulate
+                    # Training mode - simulate with REAL reward calculation
                     success = True
-                    print(f"SIMULATED SELL: {lot_size} {self.symbol} at {current_price}")
+                    reward += self._calculate_simulated_trade_reward('sell', lot_size, current_price)
+                    print(f"SIMULATED SELL: {lot_size} {self.symbol} at {current_price:.2f}, Reward: {reward:.3f}")
                 else:
                     # Live mode - real order
                     success = self.mt5_interface.place_order(
@@ -210,38 +219,33 @@ class TradingEnvironment(gym.Env):
                         volume=lot_size,
                         price=current_price
                     )
-                reward += self._calculate_trade_reward(success, 'sell', lot_size)
-                
+                    reward += self._calculate_trade_reward(success, 'sell', lot_size)
+                    
             elif action_type == 3:  # Close all positions (PROFIT TAKING)
                 if is_training_mode:
-                    # Training mode - simulate
+                    # Training mode - simulate with REAL reward calculation
                     success = True
-                    print(f"SIMULATED CLOSE ALL: {self.symbol}")
+                    reward += self._calculate_simulated_close_reward()
+                    print(f"SIMULATED CLOSE ALL: {self.symbol}, Reward: {reward:.3f}")
                 else:
                     # Live mode - real close
                     success = self.mt5_interface.close_all_positions(self.symbol)
-                reward += self._calculate_close_reward(success)
-                
-                # Extra reward if closing with profit (simulated in training)
-                if is_training_mode:
-                    # Simulate current PnL for training
-                    simulated_pnl = reward * 10  # Simple simulation
-                    if simulated_pnl > 0:
-                        reward += 2.0 + (simulated_pnl / 100.0)
-                else:
+                    reward += self._calculate_close_reward(success)
+                    
                     current_pnl = self._get_current_pnl()
                     if current_pnl > 0:
                         reward += 2.0 + (current_pnl / 100.0)  # Bonus for profitable close
                     
             elif action_type == 4:  # Hedge
                 if is_training_mode:
-                    # Training mode - simulate
+                    # Training mode - simulate with REAL reward calculation
                     success = True
-                    print(f"SIMULATED HEDGE: {lot_size} {self.symbol}")
+                    reward += self._calculate_simulated_hedge_reward(lot_size)
+                    print(f"SIMULATED HEDGE: {lot_size} {self.symbol}, Reward: {reward:.3f}")
                 else:
                     # Live mode - real hedge
                     success = self._execute_hedge_action(lot_size)
-                reward += self._calculate_hedge_reward(success)
+                    reward += self._calculate_hedge_reward(success)
             
             # Execute recovery action if needed (only in live mode)
             if not is_training_mode and recovery_action > 0 and self._should_activate_recovery():
@@ -255,6 +259,113 @@ class TradingEnvironment(gym.Env):
             reward = -5.0  # Heavy penalty for errors
             
         return reward
+
+    # เพิ่ม Methods ใหม่สำหรับ Simulation
+    def _calculate_simulated_trade_reward(self, trade_type, lot_size, entry_price):
+        """คำนวณ reward จำลองสำหรับการเทรด"""
+        try:
+            # ใช้ข้อมูลราคาจริงจาก MT5 คำนวณ reward
+            if len(self.market_data_cache) < 3:
+                return 0.1  # Small reward for action
+                
+            # เอาราคา 2-3 bars หลังมาจำลองผลลัพธ์
+            current_price = self.market_data_cache[-1]['close']
+            prev_price = self.market_data_cache[-2]['close']
+            
+            # คำนวณการเปลี่ยนแปลงราคา
+            price_change = current_price - prev_price
+            
+            # จำลอง PnL ตามทิศทางการเทรด
+            if trade_type == 'buy':
+                simulated_pnl = price_change * lot_size * 100000  # 1 lot = 100,000 units
+            else:  # sell
+                simulated_pnl = -price_change * lot_size * 100000
+                
+            # แปลง PnL เป็น reward (scale ลง)
+            reward = simulated_pnl / 50.0
+            
+            # เพิ่มปัจจัยอื่นๆ
+            # Bonus สำหรับการเทรดตามเทรนด์
+            if len(self.market_data_cache) >= 5:
+                trend = self._get_market_trend()
+                if (trade_type == 'buy' and trend > 0) or (trade_type == 'sell' and trend < 0):
+                    reward += 0.5  # Bonus for trading with trend
+            
+            # จำกัด reward ไม่ให้สุดโต่ง
+            reward = max(-3.0, min(3.0, reward))
+            
+            return reward
+            
+        except Exception as e:
+            print(f"Error calculating simulated trade reward: {e}")
+            return 0.1
+
+    def _calculate_simulated_hold_reward(self):
+        """คำนวณ reward สำหรับการ Hold"""
+        try:
+            # ถ้าไม่มี position ให้ penalty เล็กน้อย
+            if not hasattr(self, 'simulated_positions') or not self.simulated_positions:
+                return -0.01  # Small penalty for inaction
+                
+            # ถ้ามี position ให้ reward ตามการเปลี่ยนแปลงราคา
+            total_reward = 0.0
+            
+            for position in self.simulated_positions:
+                current_price = self._get_current_price()
+                entry_price = position.get('entry_price', current_price)
+                lot_size = position.get('lot_size', 0.01)
+                pos_type = position.get('type', 'buy')
+                
+                if pos_type == 'buy':
+                    pnl = (current_price - entry_price) * lot_size * 100000
+                else:
+                    pnl = (entry_price - current_price) * lot_size * 100000
+                    
+                total_reward += pnl / 100.0
+                
+            return max(-1.0, min(1.0, total_reward))
+            
+        except:
+            return -0.01
+
+    def _calculate_simulated_close_reward(self):
+        """คำนวณ reward สำหรับการปิด position"""
+        try:
+            if not hasattr(self, 'simulated_positions') or not self.simulated_positions:
+                return -0.5  # Penalty for closing when no positions
+                
+            # คำนวณ PnL รวมของ position ที่จะปิด
+            total_pnl = 0.0
+            current_price = self._get_current_price()
+            
+            for position in self.simulated_positions:
+                entry_price = position.get('entry_price', current_price)
+                lot_size = position.get('lot_size', 0.01)
+                pos_type = position.get('type', 'buy')
+                
+                if pos_type == 'buy':
+                    pnl = (current_price - entry_price) * lot_size * 100000
+                else:
+                    pnl = (entry_price - current_price) * lot_size * 100000
+                    
+                total_pnl += pnl
+                
+            # ล้าง position หลังปิด
+            self.simulated_positions = []
+            
+            # Reward ตาม PnL
+            if total_pnl > 0:
+                return 2.0 + (total_pnl / 100.0)  # Big bonus for profit
+            else:
+                return -1.0 + (total_pnl / 100.0)  # Penalty for loss
+                
+        except:
+            return -0.5
+
+    def _calculate_simulated_hedge_reward(self, lot_size):
+        """คำนวณ reward สำหรับการ Hedge"""
+        # Hedge ได้ reward เล็กน้อยเป็นการจัดการความเสี่ยง
+        return 0.5
         
     def _calculate_hold_reward(self):
         """Calculate reward for holding position"""
@@ -309,32 +420,135 @@ class TradingEnvironment(gym.Env):
         return 1.5
         
     def _get_observation(self):
-        """Get current environment observation"""
-        observation = np.zeros(92, dtype=np.float32)
+        """Get current environment observation - SIMPLIFIED"""
+        observation = np.zeros(30, dtype=np.float32)
         
         try:
-            # Market data features (51 features แทน 50)
-            market_features = self._get_market_features()
-            observation[:51] = market_features  # เปลี่ยนจาก 50 เป็น 51
+            # Market data features (15 features แทน 51)
+            market_features = self._get_simplified_market_features()
+            observation[:15] = market_features
 
-            # Position features (20 features) 
-            position_features = self._get_position_features()
-            observation[51:71] = position_features  # เปลี่ยน index
+            # Position features (8 features แทน 20) 
+            position_features = self._get_simplified_position_features()
+            observation[15:23] = position_features
 
-            # Account features (10 features)
-            account_features = self._get_account_features()  
-            observation[71:81] = account_features  # เปลี่ยน index
+            # Account features (4 features แทน 10)
+            account_features = self._get_simplified_account_features()  
+            observation[23:27] = account_features
 
-            # Recovery features (10 features)
-            recovery_features = self._get_recovery_features()
-            observation[81:91] = recovery_features  # เปลี่ยน index
+            # Recovery features (3 features แทน 10)
+            recovery_features = self._get_simplified_recovery_features()
+            observation[27:30] = recovery_features
 
         except Exception as e:
             print(f"Error getting observation: {e}")
-            # Return zeros if error occurs
             
-        return observation
+        return observation            
+
+    def _get_simplified_market_features(self):
+        """Simple market features - เร็วกว่าเดิม"""
+        features = np.zeros(15)
         
+        try:
+            if len(self.market_data_cache) < 5:
+                return features
+                
+            # เอาแค่ข้อมูลราคาพื้นฐาน
+            recent_data = self.market_data_cache[-5:]
+            prices = [data['close'] for data in recent_data]
+            
+            # Simple price features
+            current_price = prices[-1]
+            prev_price = prices[-2] if len(prices) > 1 else current_price
+            
+            features[0] = (current_price - prev_price) / prev_price if prev_price > 0 else 0
+            features[1] = (current_price - np.mean(prices)) / np.mean(prices) if np.mean(prices) > 0 else 0
+            
+            # Simple trend
+            if len(prices) >= 3:
+                features[2] = 1.0 if prices[-1] > prices[-3] else -1.0
+                
+            # Volatility
+            if len(prices) >= 3:
+                price_changes = np.diff(prices)
+                features[3] = np.std(price_changes) / current_price if current_price > 0 else 0
+                
+            # Time features
+            now = datetime.now()
+            features[4] = now.hour / 24
+            features[5] = now.weekday() / 7
+            
+            # Clean
+            features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
+            
+        except Exception as e:
+            print(f"Error in simplified market features: {e}")
+            
+        return features
+
+    def _get_simplified_position_features(self):
+        """Simple position features"""
+        features = np.zeros(8)
+        
+        try:
+            if hasattr(self, 'simulated_positions') and self.simulated_positions:
+                features[0] = len(self.simulated_positions) / 10  # Number of positions
+                
+                total_volume = sum(pos.get('lot_size', 0) for pos in self.simulated_positions)
+                features[1] = total_volume / 1.0  # Total volume
+                
+                # Average profit
+                current_price = self._get_current_price()
+                if current_price:
+                    total_pnl = 0
+                    for pos in self.simulated_positions:
+                        entry_price = pos.get('entry_price', current_price)
+                        lot_size = pos.get('lot_size', 0.01)
+                        pos_type = pos.get('type', 'buy')
+                        
+                        if pos_type == 'buy':
+                            pnl = (current_price - entry_price) * lot_size * 100000
+                        else:
+                            pnl = (entry_price - current_price) * lot_size * 100000
+                            
+                        total_pnl += pnl
+                        
+                    features[2] = total_pnl / 1000  # Normalize PnL
+                    
+        except Exception as e:
+            print(f"Error in simplified position features: {e}")
+            
+        return features
+
+    def _get_simplified_account_features(self):
+        """Simple account features"""
+        features = np.zeros(4)
+        
+        try:
+            if hasattr(self, 'simulated_balance'):
+                features[0] = self.simulated_balance / 10000
+                features[1] = self.simulated_equity / 10000
+                features[2] = (self.simulated_equity - self.simulated_balance) / self.simulated_balance if self.simulated_balance > 0 else 0
+                
+        except Exception as e:
+            print(f"Error in simplified account features: {e}")
+            
+        return features
+
+    def _get_simplified_recovery_features(self):
+        """Simple recovery features"""
+        features = np.zeros(3)
+        
+        try:
+            features[0] = 1.0 if self.recovery_active else 0.0
+            features[1] = self.recovery_level / 10
+            features[2] = self.current_step / self.max_steps
+            
+        except Exception as e:
+            print(f"Error in simplified recovery features: {e}")
+            
+        return features
+
     def _get_market_features(self):
         """Extract market-related features"""
         features = np.zeros(51)

@@ -415,19 +415,6 @@ class RecoveryEngine:
             print(f"Error in smart profit strategy: {e}")
             return False
         
-        # Grid strategy specific
-        self.grid_levels = []
-        self.grid_base_price = 0.0
-        self.grid_direction = 0  # 1 for up, -1 for down
-        
-        # Hedge strategy specific
-        self.hedge_positions = []
-        self.net_exposure = 0.0
-        
-        # Performance tracking
-        self.total_recovery_time = 0.0
-        self.max_drawdown_during_recovery = 0.0
-        self.recovery_efficiency = 0.0
         
     def activate_recovery(self, symbol: str, mt5_interface, current_pnl: float, 
                          current_equity: float, recovery_type: str = None):
@@ -924,26 +911,58 @@ class RecoveryEngine:
         return max(min_lot, min(lot_size, max_lot))
         
     def get_status(self):
-        """
-        Get current recovery status
-        """
-        status = {
-            'active': self.is_active,
-            'level': self.current_level,
-            'type': self.recovery_type if self.is_active else 'none',
-            'total_recovery_attempts': self.recovery_attempts,
-            'successful_recoveries': self.successful_recoveries,
-            'success_rate': self.recovery_efficiency,
-            'average_recovery_time': self.total_recovery_time / max(self.recovery_attempts, 1),
-            'total_recovery_volume': self.total_recovery_volume
-        }
-        
-        if self.is_active and self.recovery_start_time:
-            current_duration = (datetime.now() - self.recovery_start_time).total_seconds()
-            status['current_duration'] = current_duration
+        """Get current recovery status - FIXED FORMAT"""
+        try:
+            status = {
+                'recovery_active': self.is_active,
+                'recovery_level': self.current_level,
+                'type': self.recovery_type if self.is_active else 'none',
+                'total_recovery_attempts': self.recovery_attempts,
+                'successful_recoveries': self.successful_recoveries,
+                'success_rate': self.recovery_efficiency,
+                'average_recovery_time': self.total_recovery_time / max(self.recovery_attempts, 1),
+                'total_recovery_volume': self.total_recovery_volume,
+                # เพิ่ม profit settings
+                'profit_settings': {
+                    'min_profit_target': getattr(self.profit_manager, 'min_profit_target', 25),
+                    'trailing_stop_distance': getattr(self.profit_manager, 'trailing_stop_distance', 15),
+                    'quick_profit_mode': self.profit_manager.config.get('quick_profit_mode', True) if hasattr(self, 'profit_manager') else True
+                }
+            }
             
-        return status
-        
+            if self.is_active and self.recovery_start_time:
+                current_duration = (datetime.now() - self.recovery_start_time).total_seconds()
+                status['current_duration'] = current_duration
+                
+            return status
+        except Exception as e:
+            print(f"Error getting status: {e}")
+            return {
+                'recovery_active': False,
+                'recovery_level': 0,
+                'type': 'none',
+                'profit_settings': {
+                    'min_profit_target': 25,
+                    'trailing_stop_distance': 15,
+                    'quick_profit_mode': True
+                }
+            }        
+    
+    def update_profit_settings(self, new_settings):
+        """Update profit settings in real-time"""
+        try:
+            # Update profit manager settings
+            if hasattr(self, 'profit_manager'):
+                self.profit_manager.min_profit_target = new_settings.get('min_profit_target', 25)
+                self.profit_manager.trailing_stop_distance = new_settings.get('trailing_stop_distance', 15)
+                self.profit_manager.config.update(new_settings)
+                
+            print(f"Profit settings updated: {new_settings}")
+            return True
+        except Exception as e:
+            print(f"Error updating profit settings: {e}")
+            return False
+    
     def reset(self):
         """
         Reset recovery system to initial state

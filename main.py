@@ -266,17 +266,31 @@ class TradingGUI:
                     'profit_mode': self.profit_mode_var.get()
                 }
                 
-                self.recovery_engine.update_profit_settings(new_settings)
-                self.log_message(f"Profit settings applied: Target=${new_settings['min_profit_target']:.1f}, Quick={new_settings['quick_profit_mode']}")
-                messagebox.showinfo("Success", f"Profit settings applied!\nTarget: ${new_settings['min_profit_target']:.1f}\nMode: {new_settings['profit_mode']}")
+                # เรียก method และเช็ค return value
+                success = self.recovery_engine.update_profit_settings(new_settings)
+                
+                if success:
+                    self.log_message(f"Profit settings applied: Target=${new_settings['min_profit_target']:.1f}, Quick={new_settings['quick_profit_mode']}")
+                    messagebox.showinfo("Success", f"Profit settings applied!\nTarget: ${new_settings['min_profit_target']:.1f}\nMode: {new_settings['profit_mode']}")
+                    
+                    # Update config ด้วย
+                    self.config.update(new_settings)
+                    
+                    # Update GUI display
+                    self.update_recovery_status()
+                    
+                else:
+                    self.log_message("Failed to apply profit settings")
+                    messagebox.showerror("Error", "Failed to apply profit settings")
+                    
             else:
                 self.log_message("Recovery engine not initialized yet")
                 messagebox.showwarning("Warning", "Start trading first to apply profit settings")
                 
         except Exception as e:
             self.log_message(f"Error applying profit settings: {str(e)}")
-            messagebox.showerror("Error", f"Error applying settings: {str(e)}")
-            
+            messagebox.showerror("Error", f"Error applying settings: {str(e)}")            
+    
     def update_recovery_status(self):
         """Update recovery status display with profit info"""
         try:
@@ -442,14 +456,14 @@ class TradingGUI:
             
             print("DEBUG: Creating RL agent...")
             self.rl_agent = RLAgent(self.trading_env, self.config)
-            
+            self.config['training_mode'] = True
             self.is_training = True
             self.start_training_btn.config(state='disabled')
             self.stop_training_btn.config(state='normal')
             self.pause_training_btn.config(state='normal')
             
             print("DEBUG: Starting training thread...")
-            
+            self.trading_env = TradingEnvironment(self.mt5_interface, self.recovery_engine, self.config)
             # Start training thread with callback
             self.training_thread = threading.Thread(target=self.training_loop_with_callback)
             self.training_thread.daemon = True
@@ -692,6 +706,7 @@ class TradingGUI:
                 'algorithm': 'PPO',
                 'learning_rate': 0.0003,
                 'training_steps': 10000,
+                'training_mode': True,
                 # Default profit settings - เก็บกำไรเร็วขึ้น
                 'min_profit_target': 25,
                 'trailing_stop_distance': 15,

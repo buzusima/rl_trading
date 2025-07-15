@@ -126,6 +126,37 @@ class TradingCallback(BaseCallback):
             print("Final model saved")
         except Exception as e:
             print(f"Final save error: {e}")
+class GUIProgressCallback(BaseCallback):
+    """Custom callback for GUI progress updates"""
+    
+    def __init__(self, gui_callback, total_timesteps, verbose=0):
+        super(GUIProgressCallback, self).__init__(verbose)
+        self.gui_callback = gui_callback
+        self.total_timesteps = total_timesteps
+        self.last_update = 0
+        self.update_interval = 100  # Update ทุก 100 steps
+        
+    def _on_step(self) -> bool:
+        """Called at each step"""
+        current_step = self.n_calls
+        
+        # Update GUI ทุก interval
+        if current_step - self.last_update >= self.update_interval:
+            if self.gui_callback:
+                # Get current reward if available
+                reward = None
+                try:
+                    if hasattr(self.model, 'logger') and self.model.logger:
+                        reward = self.model.logger.name_to_value.get('rollout/ep_rew_mean', None)
+                except:
+                    pass
+                
+                # Call GUI callback
+                self.gui_callback(current_step, self.total_timesteps, reward)
+                
+            self.last_update = current_step
+            
+        return True  # Continue training
 
 class RLAgent:
     """
@@ -244,7 +275,7 @@ class RLAgent:
             self.model = None
             
     def train(self, total_timesteps: int = None, callback: Callable = None):
-        """Train the RL model"""
+        """Train the RL model with GUI callback support"""
         print("DEBUG: train() method called")
         
         if self.model is None:
@@ -255,21 +286,32 @@ class RLAgent:
             timesteps = total_timesteps or self.total_timesteps
             print(f"DEBUG: Training timesteps = {timesteps}")
             
-            # Setup callbacks - เอาทิ้งหมด
+            # Setup custom callback สำหรับ GUI
             callbacks = []
-            print(f"DEBUG: Callbacks setup, count = {len(callbacks)}")
+            if callback:
+                gui_callback = GUIProgressCallback(callback, timesteps)
+                callbacks.append(gui_callback)
+                print(f"DEBUG: GUI callback added")
             
+            print(f"DEBUG: Callbacks setup, count = {len(callbacks)}")
             print(f"Starting training for {timesteps} timesteps...")
             
             # Record training start
             training_start = datetime.now()
             print("DEBUG: About to call model.learn()")
             
-            # Train the model - ไม่ใส่ callback
-            self.model.learn(
-                total_timesteps=timesteps,
-                progress_bar=True
-            )
+            # Train the model with callback support
+            if callbacks:
+                self.model.learn(
+                    total_timesteps=timesteps,
+                    callback=callbacks,
+                    progress_bar=True
+                )
+            else:
+                self.model.learn(
+                    total_timesteps=timesteps,
+                    progress_bar=True
+                )
             
             print("DEBUG: model.learn() completed")
             
@@ -284,8 +326,8 @@ class RLAgent:
             print(f"Training error: {str(e)}")
             import traceback
             traceback.print_exc()
-            return False                    
-    
+            return False
+        
     def train_async(self, total_timesteps: int = None, callback: Callable = None):
         """
         Start training in a separate thread

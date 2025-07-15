@@ -664,6 +664,7 @@ class TradingGUI:
         """Reset to default values including profit settings"""
         # Reset trading parameters
         self.symbol_var.set('XAUUSD')
+        
         self.lot_size_var.set(0.01)
         self.max_positions_var.set(10)
         self.martingale_mult_var.set(2.0)

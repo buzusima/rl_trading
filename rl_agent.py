@@ -253,7 +253,11 @@ class RLAgent:
             
         try:
             timesteps = total_timesteps or self.total_timesteps
-            
+            self.model.learn(
+                total_timesteps=timesteps,
+                progress_bar=True
+            )
+        
             # Setup callback
             callbacks = []
             

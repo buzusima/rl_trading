@@ -34,12 +34,11 @@ class TradingEnvironment(gym.Env):
         # Account info: balance, equity, margin, etc. (10 features)
         # Recovery info: recovery level, drawdown, etc. (10 features)
         self.observation_space = spaces.Box(
-            low=-np.inf, 
-            high=np.inf, 
-            shape=(90,),  # Total features
+            low=np.array([-10.0] * 90, dtype=np.float32), 
+            high=np.array([10.0] * 90, dtype=np.float32), 
+            shape=(90,),  
             dtype=np.float32
-        )
-        
+        )       
         # Action space: [action_type, lot_multiplier, recovery_action]
         # action_type: 0=hold, 1=buy, 2=sell, 3=close_all, 4=hedge
         # lot_multiplier: 0.5 to 3.0 (for position sizing)

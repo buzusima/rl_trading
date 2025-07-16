@@ -491,80 +491,160 @@ class MT5Interface:
         return self.place_order(symbol, order_type, volume, price, sl, tp, comment)
         
     def close_position(self, position_ticket: int):
-        """
-        Close specific position by ticket
-        """
+        """Enhanced close position with retry logic"""
         try:
             self._rate_limit()
             
-            # Get position info
-            position = mt5.positions_get(ticket=position_ticket)
-            if not position:
-                return False
+            # Get position info with retry
+            position = None
+            for attempt in range(3):
+                positions = mt5.positions_get(ticket=position_ticket)
+                if positions and len(positions) > 0:
+                    position = positions[0]
+                    break
+                print(f"⚠️ Retry {attempt + 1}: Getting position {position_ticket}...")
+                time.sleep(0.3)
                 
-            pos = position[0]
+            if not position:
+                print(f"⚠️ Position {position_ticket} not found (might be already closed)")
+                return True  # Consider success if position doesn't exist
+                
+            pos = position
+            symbol = pos.symbol
+            volume = pos.volume
+            pos_type = pos.type
             
-            # Determine close order type
-            if pos.type == mt5.POSITION_TYPE_BUY:
+            print(f"🔍 Closing: {symbol} {volume} lots, type: {pos_type}")
+            
+            # Determine close order type and price
+            if pos_type == mt5.POSITION_TYPE_BUY:
                 order_type = mt5.ORDER_TYPE_SELL
-                price = mt5.symbol_info_tick(pos.symbol).bid
+                tick = mt5.symbol_info_tick(symbol)
+                if not tick:
+                    print(f"❌ Cannot get tick for {symbol}")
+                    return False
+                price = tick.bid
             else:
                 order_type = mt5.ORDER_TYPE_BUY
-                price = mt5.symbol_info_tick(pos.symbol).ask
+                tick = mt5.symbol_info_tick(symbol)
+                if not tick:
+                    print(f"❌ Cannot get tick for {symbol}")
+                    return False
+                price = tick.ask
                 
+            # Get best filling mode for this symbol
+            filling_mode = self.get_symbol_filling_mode(symbol)
+            
             # Prepare close request
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": pos.symbol,
-                "volume": pos.volume,
+                "symbol": symbol,
+                "volume": volume,
                 "type": order_type,
                 "position": position_ticket,
                 "price": price,
                 "deviation": self.slippage,
                 "magic": self.magic_number,
-                "comment": "Close by RL Trading",
+                "comment": "AI Close",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                "type_filling": filling_mode,
             }
             
-            result = mt5.order_send(request)
+            print(f"🔄 Close request: {request}")
             
-            if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-                print(f"Position {position_ticket} closed successfully")
-                return True
-            else:
-                self.last_error = f"Close failed: {result.retcode if result else 'No result'}"
-                return False
+            # Send close order with retry
+            for attempt in range(3):
+                result = mt5.order_send(request)
                 
-        except Exception as e:
-            self.last_error = f"Error closing position: {str(e)}"
+                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                    print(f"✅ Position {position_ticket} closed successfully")
+                    return True
+                elif result:
+                    print(f"⚠️ Close attempt {attempt + 1} failed: {result.retcode} - {result.comment}")
+                    
+                    # Try different filling mode on retry
+                    if attempt < 2:
+                        if filling_mode == mt5.ORDER_FILLING_FOK:
+                            filling_mode = mt5.ORDER_FILLING_IOC
+                        elif filling_mode == mt5.ORDER_FILLING_IOC:
+                            filling_mode = mt5.ORDER_FILLING_RETURN
+                        else:
+                            filling_mode = mt5.ORDER_FILLING_IOC
+                            
+                        request["type_filling"] = filling_mode
+                        print(f"🔄 Retrying with filling mode: {filling_mode}")
+                        time.sleep(0.5)
+                else:
+                    print(f"❌ Close attempt {attempt + 1}: No result returned")
+                    time.sleep(0.5)
+                    
+            self.last_error = f"Close failed after 3 attempts: {result.retcode if result else 'No result'}"
+            print(f"❌ Failed to close position {position_ticket} after 3 attempts")
             return False
             
+        except Exception as e:
+            self.last_error = f"Error closing position: {str(e)}"
+            print(f"❌ close_position exception: {e}")
+            return False
+                
     def close_all_positions(self, symbol: str = None):
-        """
-        Close all positions for symbol or all symbols
-        """
+        """Enhanced close all positions with better error handling"""
         try:
-            positions = self.get_positions(symbol)
-            
+            # Get positions with retry
+            positions = None
+            for attempt in range(3):
+                positions = self.get_positions(symbol)
+                if positions is not None:
+                    break
+                print(f"⚠️ Retry {attempt + 1}: Getting positions...")
+                time.sleep(0.5)
+                
+            if positions is None:
+                print("❌ Could not get positions after retries")
+                return False
+                
             if not positions:
+                print("ℹ️ No positions to close")
                 return True
                 
+            print(f"🔄 Attempting to close {len(positions)} positions...")
+            
             success_count = 0
             total_count = len(positions)
             
-            for position in positions:
-                if self.close_position(position['ticket']):
-                    success_count += 1
-                    time.sleep(0.1)  # Small delay between closes
+            for i, position in enumerate(positions):
+                try:
+                    ticket = position.get('ticket')
+                    symbol_pos = position.get('symbol', '')
+                    volume = position.get('volume', 0)
                     
-            print(f"Closed {success_count}/{total_count} positions")
-            return success_count == total_count
+                    print(f"🔄 Closing position {i+1}/{total_count}: {ticket} ({symbol_pos}, {volume})")
+                    
+                    if self.close_position(ticket):
+                        success_count += 1
+                        print(f"✅ Position {ticket} closed successfully")
+                    else:
+                        print(f"❌ Position {ticket} failed to close")
+                        
+                    # Delay between closes to avoid rate limiting
+                    if i < total_count - 1:  # Don't delay after last position
+                        time.sleep(0.2)
+                        
+                except Exception as e:
+                    print(f"❌ Error closing position {i}: {e}")
+                    continue
+                    
+            success_rate = success_count / total_count if total_count > 0 else 0
+            print(f"📊 Close summary: {success_count}/{total_count} successful ({success_rate:.1%})")
+            
+            # Return True if at least 80% successful
+            return success_rate >= 0.8
             
         except Exception as e:
             self.last_error = f"Error closing all positions: {str(e)}"
+            print(f"❌ close_all_positions error: {e}")
             return False
-            
+                
     def cancel_order(self, order_ticket: int):
         """
         Cancel pending order

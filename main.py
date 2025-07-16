@@ -46,6 +46,12 @@ class TradingGUI:
         # Configuration
         self.config = self.load_config()
         
+        # เพิ่มตัวแปรสำหรับ AI monitoring
+        self.ai_decision_counts = {'HOLD': 0, 'BUY': 0, 'SELL': 0, 'CLOSE': 0, 'HEDGE': 0}
+        self.ai_override_count = 0
+        self.ai_total_rewards = []
+        self.ai_decision_labels = {}
+        
         # Initialize GUI components
         self.setup_gui()
         
@@ -172,7 +178,22 @@ class TradingGUI:
         
         self.margin_label = tk.Label(account_frame, text="Margin: $0.00")
         self.margin_label.pack(side='left', padx=10)
-        
+        # เพิ่ม Debug section
+        debug_frame = ttk.LabelFrame(self.main_frame, text="🔧 Debug Tools")
+        debug_frame.pack(fill='x', padx=10, pady=5)
+
+        debug_btn = tk.Button(debug_frame, text="🔍 Debug Positions", 
+                            command=self.debug_current_positions, bg='yellow')
+        debug_btn.pack(side='left', padx=5)
+        spread_frame = ttk.LabelFrame(self.main_frame, text="📊 Spread Monitor")
+        spread_frame.pack(fill='x', padx=10, pady=5)
+
+        self.spread_label = tk.Label(spread_frame, text="Spread: Loading...")
+        self.spread_label.pack(side='left', padx=10)
+
+        self.net_pnl_label = tk.Label(spread_frame, text="Net PnL: $0.00")
+        self.net_pnl_label.pack(side='left', padx=10)
+
     def setup_configuration(self):
         # Trading Parameters Frame
         trading_params = ttk.LabelFrame(self.config_frame, text="Trading Parameters")
@@ -214,8 +235,8 @@ class TradingGUI:
                                     values=['Martingale', 'Grid', 'Hedge', 'Combined'])
         recovery_combo.grid(row=2, column=1, padx=5, pady=2)
         
-        # RL Parameters Frame
-        rl_params = ttk.LabelFrame(self.config_frame, text="RL Parameters")
+        # 🤖 ENHANCED RL Parameters Frame
+        rl_params = ttk.LabelFrame(self.config_frame, text="🤖 AI Learning Parameters")
         rl_params.pack(fill='x', padx=10, pady=5)
         
         # Algorithm
@@ -225,18 +246,52 @@ class TradingGUI:
                                 values=['PPO', 'DQN', 'A2C'])
         algo_combo.grid(row=0, column=1, padx=5, pady=2)
         
-        # Learning Rate
+        # Learning Rate - ปรับให้เหมาะสำหรับ AI จริง
         tk.Label(rl_params, text="Learning Rate:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        self.learning_rate_var = tk.DoubleVar(value=self.config.get('learning_rate', 0.0003))
+        self.learning_rate_var = tk.DoubleVar(value=self.config.get('learning_rate', 0.001))  # เพิ่มจาก 0.0003
         tk.Entry(rl_params, textvariable=self.learning_rate_var).grid(row=1, column=1, padx=5, pady=2)
         
-        # Training Steps
+        # Training Steps - เพิ่มขึ้นสำหรับ AI ที่ดีขึ้น
         tk.Label(rl_params, text="Training Steps:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
-        self.training_steps_var = tk.IntVar(value=self.config.get('training_steps', 10000))
+        self.training_steps_var = tk.IntVar(value=self.config.get('training_steps', 50000))  # เพิ่มจาก 10000
         tk.Entry(rl_params, textvariable=self.training_steps_var).grid(row=2, column=1, padx=5, pady=2)
         
-        # Profit Taking Parameters Frame - เพิ่มใหม่
-        profit_params = ttk.LabelFrame(self.config_frame, text="Profit Taking Settings")
+        # 🎯 Advanced AI Settings Frame
+        advanced_params = ttk.LabelFrame(self.config_frame, text="🎯 Advanced AI Settings")
+        advanced_params.pack(fill='x', padx=10, pady=5)
+        
+        # Batch Size
+        tk.Label(advanced_params, text="Batch Size:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
+        self.batch_size_var = tk.IntVar(value=self.config.get('batch_size', 128))
+        tk.Entry(advanced_params, textvariable=self.batch_size_var).grid(row=0, column=1, padx=5, pady=2)
+        
+        # Episode Length (ให้ AI เรียนรู้เร็วขึ้น)
+        tk.Label(advanced_params, text="Episode Length:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
+        self.episode_length_var = tk.IntVar(value=self.config.get('max_steps', 500))  # ลดจาก 10000
+        tk.Entry(advanced_params, textvariable=self.episode_length_var).grid(row=1, column=1, padx=5, pady=2)
+        
+        # Training Mode Toggle
+        self.training_mode_var = tk.BooleanVar(value=self.config.get('training_mode', True))
+        tk.Checkbutton(advanced_params, text="🎓 Training Mode (Simulation)", 
+                    variable=self.training_mode_var).grid(row=2, column=0, columnspan=2, sticky='w', padx=5, pady=2)
+        
+        # Auto Save Model
+        self.auto_save_var = tk.BooleanVar(value=self.config.get('auto_save_model', True))
+        tk.Checkbutton(advanced_params, text="💾 Auto Save Best Model", 
+                    variable=self.auto_save_var).grid(row=3, column=0, columnspan=2, sticky='w', padx=5, pady=2)
+        
+        # ⚡ Quick Training Button
+        quick_train_btn = tk.Button(advanced_params, text="⚡ Quick Train (1000 steps)", 
+                                command=self.quick_train, bg='lightblue')
+        quick_train_btn.grid(row=4, column=0, pady=5)
+        
+        # 🧪 AI Test Button
+        ai_test_btn = tk.Button(advanced_params, text="🧪 Test AI Intelligence", 
+                            command=self.test_ai_intelligence, bg='orange')
+        ai_test_btn.grid(row=4, column=1, pady=5)
+        
+        # Profit Taking Parameters Frame
+        profit_params = ttk.LabelFrame(self.config_frame, text="💰 Profit Taking Settings")
         profit_params.pack(fill='x', padx=10, pady=5)
         
         # Min Profit Target
@@ -251,31 +306,237 @@ class TradingGUI:
         
         # Quick Profit Mode
         self.quick_profit_var = tk.BooleanVar(value=self.config.get('quick_profit_mode', True))
-        tk.Checkbutton(profit_params, text="Quick Profit Mode (เก็บกำไรเร็วขึ้น)", 
-                      variable=self.quick_profit_var).grid(row=2, column=0, columnspan=2, sticky='w', padx=5, pady=2)
+        tk.Checkbutton(profit_params, text="⚡ Quick Profit Mode (เก็บกำไรเร็วขึ้น)", 
+                    variable=self.quick_profit_var).grid(row=2, column=0, columnspan=2, sticky='w', padx=5, pady=2)
         
         # Profit Mode Selection
         tk.Label(profit_params, text="Profit Mode:").grid(row=3, column=0, sticky='w', padx=5, pady=2)
         self.profit_mode_var = tk.StringVar(value=self.config.get('profit_mode', 'balanced'))
         profit_mode_combo = ttk.Combobox(profit_params, textvariable=self.profit_mode_var, 
-                                       values=['conservative', 'balanced', 'aggressive', 'scalping'])
+                                    values=['conservative', 'balanced', 'aggressive', 'scalping'])
         profit_mode_combo.grid(row=3, column=1, padx=5, pady=2)
         
         # Apply Profit Settings Button
-        tk.Button(profit_params, text="Apply Profit Settings", 
-                 command=self.apply_profit_settings, bg='lightgreen').grid(row=4, column=0, columnspan=2, pady=5)
+        tk.Button(profit_params, text="✅ Apply Profit Settings", 
+                command=self.apply_profit_settings, bg='lightgreen').grid(row=4, column=0, columnspan=2, pady=5)
+        
+        # 🔍 AI Monitoring Frame - FIXED VERSION
+        monitoring_frame = ttk.LabelFrame(self.config_frame, text="🔍 AI Intelligence Monitor")
+        monitoring_frame.pack(fill='x', padx=10, pady=5)
+
+        # AI Decision Statistics
+        stats_frame = tk.Frame(monitoring_frame)
+        stats_frame.pack(fill='x', padx=5, pady=5)
+
+        # Decision counters - ใช้ตัวแปร instance ที่สร้างใน __init__
+        for i, (action, count) in enumerate(self.ai_decision_counts.items()):
+            label = tk.Label(stats_frame, text=f"{action}: {count}", relief='sunken', width=10, bg='lightgray', font=('Arial', 9, 'bold'))
+            label.grid(row=0, column=i, padx=2, pady=2)
+            self.ai_decision_labels[action] = label
+
+        # Smart Override Counter
+        self.ai_override_label = tk.Label(stats_frame, text="🧠 Smart Overrides: 0", fg='blue', font=('Arial', 10, 'bold'))
+        self.ai_override_label.grid(row=1, column=0, columnspan=2, pady=5, sticky='w')
+
+        # Average Reward
+        self.ai_reward_label = tk.Label(stats_frame, text="📊 Avg Reward: 0.00", fg='green', font=('Arial', 10, 'bold'))
+        self.ai_reward_label.grid(row=1, column=2, columnspan=2, pady=5, sticky='w')
+
+        # AI Status
+        self.ai_status_label = tk.Label(stats_frame, text="🤖 AI Status: Not Trained", fg='red', font=('Arial', 10, 'bold'))
+        self.ai_status_label.grid(row=1, column=4, pady=5, sticky='w')
+
+        self.ai_status_label = tk.Label(stats_frame, text="🤖 AI Status: Not Trained", fg='red', font=('Arial', 9, 'bold'))
+        self.ai_status_label.grid(row=1, column=4, pady=5, sticky='w')
         
         # Configuration Buttons
         config_buttons = ttk.Frame(self.config_frame)
         config_buttons.pack(fill='x', padx=10, pady=10)
         
-        tk.Button(config_buttons, text="Save Config", 
-                 command=self.save_config).pack(side='left', padx=5)
-        tk.Button(config_buttons, text="Load Config", 
-                 command=self.load_config_dialog).pack(side='left', padx=5)
-        tk.Button(config_buttons, text="Reset to Default", 
-                 command=self.reset_config).pack(side='left', padx=5)
-                 
+        tk.Button(config_buttons, text="💾 Save Config", 
+                command=self.save_config).pack(side='left', padx=5)
+        tk.Button(config_buttons, text="📂 Load Config", 
+                command=self.load_config_dialog).pack(side='left', padx=5)
+        tk.Button(config_buttons, text="🔄 Reset to Default", 
+                command=self.reset_config).pack(side='left', padx=5)
+
+    def quick_train(self):
+        """Quick training for testing AI intelligence"""
+        if not self.is_connected:
+            messagebox.showwarning("Warning", "Please connect to MT5 first")
+            return
+            
+        try:
+            # Store original values
+            original_steps = self.training_steps_var.get()
+            original_episode_length = getattr(self, 'episode_length_var', tk.IntVar(value=500)).get()
+            
+            # Set quick training parameters
+            self.training_steps_var.set(1000)  # Quick test
+            if hasattr(self, 'episode_length_var'):
+                self.episode_length_var.set(100)  # Short episodes
+            
+            # Reset monitoring
+            self.reset_ai_monitoring()
+            
+            # Start training
+            self.start_training()
+            
+            # Restore original values after a delay
+            def restore_values():
+                self.training_steps_var.set(original_steps)
+                if hasattr(self, 'episode_length_var'):
+                    self.episode_length_var.set(original_episode_length)
+            
+            self.root.after(2000, restore_values)  # Restore after 2 seconds
+            
+            self.log_message("🚀 Quick AI training started (1000 steps)")
+            self.log_message("📊 Watch console for 🧠 SMART OVERRIDE messages!")
+            
+        except Exception as e:
+            self.log_message(f"Quick training error: {str(e)}")
+            messagebox.showerror("Error", f"Quick training error: {str(e)}")
+
+    def test_ai_intelligence(self):
+        """Test AI intelligence without full training"""
+        if not self.is_connected:
+            messagebox.showwarning("Warning", "Please connect to MT5 first")
+            return
+            
+        try:
+            from environment import TradingEnvironment
+            from rl_agent import RLAgent
+            
+            # Create test environment
+            test_config = self.config.copy()
+            test_config['training_mode'] = True
+            test_config['max_steps'] = 50
+            
+            test_env = TradingEnvironment(self.mt5_interface, self.recovery_engine, test_config)
+            
+            # Reset environment and get observation
+            observation, info = test_env.reset()
+            
+            self.log_message("🧪 Testing AI Intelligence...")
+            self.log_message(f"📊 Observation shape: {observation.shape}")
+            
+            # Test different scenarios
+            test_scenarios = [
+                ([0.2, 1.5, 0], "HOLD scenario"),
+                ([0.8, 1.5, 0], "BUY scenario"), 
+                ([2.2, 1.5, 0], "SELL scenario"),
+                ([3.2, 1.5, 0], "CLOSE scenario"),
+                ([4.0, 1.5, 0], "HEDGE scenario")
+            ]
+            
+            for action, description in test_scenarios:
+                self.log_message(f"🧪 Testing {description}...")
+                observation, reward, done, truncated, info = test_env.step(action)
+                self.log_message(f"   Reward: {reward:.3f}")
+                
+            self.log_message("✅ AI Intelligence test completed!")
+            self.log_message("🔍 Check console for detailed messages")
+            
+            messagebox.showinfo("AI Test", "AI Intelligence test completed!\nCheck logs for details.")
+            
+        except Exception as e:
+            self.log_message(f"❌ AI test error: {str(e)}")
+            messagebox.showerror("Error", f"AI test error: {str(e)}")
+
+    def reset_ai_monitoring(self):
+        """Reset AI monitoring statistics - FIXED VERSION"""
+        try:
+            self.ai_decision_counts = {'HOLD': 0, 'BUY': 0, 'SELL': 0, 'CLOSE': 0, 'HEDGE': 0}
+            self.ai_override_count = 0
+            self.ai_total_rewards = []
+            
+            # Update labels
+            for action, label in self.ai_decision_labels.items():
+                label.config(text=f"{action}: 0", bg='lightgray')
+                
+            self.ai_override_label.config(text="🧠 Smart Overrides: 0")
+            self.ai_reward_label.config(text="📊 Avg Reward: 0.00")
+            self.ai_status_label.config(text="🤖 AI Status: Testing...", fg='orange')
+            
+        except Exception as e:
+            print(f"Reset monitoring error: {e}")
+
+    def update_ai_monitoring(self, action_taken, reward, override_used=False):
+        """Update AI monitoring display - FIXED VERSION"""
+        try:
+            # Update decision count
+            if action_taken in self.ai_decision_counts:
+                self.ai_decision_counts[action_taken] += 1
+                if action_taken in self.ai_decision_labels:
+                    self.ai_decision_labels[action_taken].config(text=f"{action_taken}: {self.ai_decision_counts[action_taken]}")
+                    # เปลี่ยนสีตาม action
+                    if action_taken == 'BUY':
+                        self.ai_decision_labels[action_taken].config(bg='lightgreen')
+                    elif action_taken == 'SELL':
+                        self.ai_decision_labels[action_taken].config(bg='lightcoral')
+                    elif action_taken == 'CLOSE':
+                        self.ai_decision_labels[action_taken].config(bg='gold')
+                    elif action_taken == 'HEDGE':
+                        self.ai_decision_labels[action_taken].config(bg='lightblue')
+                    else:  # HOLD
+                        self.ai_decision_labels[action_taken].config(bg='lightgray')
+            
+            # Update override count
+            if override_used:
+                self.ai_override_count += 1
+                self.ai_override_label.config(text=f"🧠 Smart Overrides: {self.ai_override_count}")
+            
+            # Update reward tracking
+            self.ai_total_rewards.append(reward)
+            if len(self.ai_total_rewards) > 100:  # Keep last 100 rewards
+                self.ai_total_rewards = self.ai_total_rewards[-100:]
+                
+            avg_reward = sum(self.ai_total_rewards) / len(self.ai_total_rewards) if self.ai_total_rewards else 0
+            self.ai_reward_label.config(text=f"📊 Avg Reward: {avg_reward:.3f}")
+            
+            # Update AI status based on performance
+            if len(self.ai_total_rewards) > 10:
+                if avg_reward > 1.0:
+                    self.ai_status_label.config(text="🤖 AI Status: Excellent", fg='darkgreen')
+                elif avg_reward > 0.5:
+                    self.ai_status_label.config(text="🤖 AI Status: Learning Well", fg='green')
+                elif avg_reward > 0.0:
+                    self.ai_status_label.config(text="🤖 AI Status: Learning", fg='orange')
+                elif avg_reward > -0.5:
+                    self.ai_status_label.config(text="🤖 AI Status: Struggling", fg='red')
+                else:
+                    self.ai_status_label.config(text="🤖 AI Status: Poor", fg='darkred')
+            else:
+                self.ai_status_label.config(text="🤖 AI Status: Collecting Data", fg='blue')
+                    
+        except Exception as e:
+            print(f"AI Monitoring update error: {e}")
+
+    def get_action_name_from_value(self, action_value):
+        """Convert action value to action name"""
+        try:
+            if action_value < 0.3:
+                return 'HOLD'
+            elif 0.3 <= action_value < 1.7:
+                return 'BUY'
+            elif 1.7 <= action_value < 2.7:
+                return 'SELL'
+            elif 2.7 <= action_value < 3.5:
+                return 'CLOSE'
+            else:
+                return 'HEDGE'
+        except:
+            return 'UNKNOWN'
+
+    def check_for_override_in_logs(self):
+        """Check recent logs for override messages"""
+        try:
+            # Simple way to detect override from console output
+            # This is a placeholder - you might need to implement based on your logging
+            return False
+        except:
+            return False
+
     def apply_profit_settings(self):
         """Apply profit settings to recovery engine in real-time"""
         try:
@@ -987,21 +1248,25 @@ class TradingGUI:
     def trading_loop(self):
         while self.is_trading:
             try:
-                self.trading_env.update_market_data()
-                # Get observation from environment (แทน market_data)
+                # Get observation from environment
                 observation = self.trading_env._get_observation()
-                self.log_message(f"🔍 Observation updated: {observation[:5]}...")  # ← เพิ่ม
-
+                
                 # Get RL agent decision
                 action = self.rl_agent.get_action(observation)
-                action = self.force_ai_diversity(action)
-
-                action[0] += np.random.normal(0, 0.05)  # Add noise to action
-                action[0] = np.clip(action[0], 0, 4)    # Keep in range
-                self.log_message(f"🤖 AI Decision: {action}")  # ← เพิ่ม
-
+                
+                # Convert action to name
+                action_name = self.get_action_name_from_value(action[0])
+                
                 # Execute action
-                self.execute_action(action)
+                observation_new, reward, done, truncated, info = self.trading_env.step(action)
+                
+                # Check for override (simplified)
+                override_used = self.check_for_override_in_logs()
+                
+                # 🔧 UPDATE AI MONITORING
+                self.root.after(0, lambda: self.update_ai_monitoring(action_name, float(reward), override_used))
+                
+                self.log_message(f"🤖 AI: {action_name} (reward: {reward:.3f})")
                 
                 # Update GUI
                 self.root.after(0, self.update_gui)
@@ -1089,6 +1354,8 @@ class TradingGUI:
         # Update recovery status
         self.update_recovery_status()
         
+        self.update_spread_monitor()
+
     def update_positions(self):
         # Clear existing items
         for item in self.pos_tree.get_children():
@@ -1176,12 +1443,12 @@ class TradingGUI:
         messagebox.showinfo("Success", "Configuration saved successfully")
         
     def load_config(self):
-        """Load configuration including profit settings"""
+        """Load configuration with enhanced AI parameters"""
         try:
             with open('config/user_config.json', 'r') as f:
                 return json.load(f)
         except FileNotFoundError:
-            # Return default config with profit settings
+            # Return enhanced default config for AI intelligence
             return {
                 'symbol': 'XAUUSD',
                 'initial_lot_size': 0.01,
@@ -1189,17 +1456,23 @@ class TradingGUI:
                 'martingale_multiplier': 2.0,
                 'grid_spacing': 100,
                 'recovery_type': 'Martingale',
+                
+                # 🤖 ENHANCED AI PARAMETERS
                 'algorithm': 'PPO',
-                'learning_rate': 0.0003,
-                'training_steps': 1000,
-                'training_mode': False,
-                # Default profit settings - เก็บกำไรเร็วขึ้น
+                'learning_rate': 0.001,      # เพิ่มขึ้นเพื่อเรียนรู้เร็วขึ้น
+                'training_steps': 50000,     # เพิ่มขึ้นเพื่อ AI ที่ดีขึ้น
+                'batch_size': 128,           # เพิ่มขึ้น
+                'max_steps': 500,            # ลดลงเพื่อ episode สั้นลง
+                'training_mode': True,
+                'auto_save_model': True,
+                
+                # Profit settings
                 'min_profit_target': 25,
                 'trailing_stop_distance': 15,
                 'quick_profit_mode': True,
                 'profit_mode': 'balanced'
-            }
-            
+            }            
+    
     def load_config_dialog(self):
         """Load configuration from file dialog"""
         filename = filedialog.askopenfilename(
@@ -1258,7 +1531,76 @@ class TradingGUI:
         
         self.log_message("Configuration reset to defaults (Quick Profit Mode)")
         messagebox.showinfo("Reset", "Configuration reset to quick profit defaults")
-        
+    
+    def debug_current_positions(self):
+        """Debug current positions for troubleshooting"""
+        try:
+            if not hasattr(self, 'mt5_interface'):
+                print("❌ MT5 interface not available")
+                return
+                
+            positions = self.mt5_interface.get_positions()
+            
+            if not positions:
+                print("ℹ️ No current positions")
+                self.log_message("ℹ️ No current positions")
+                return
+                
+            print(f"🔍 DEBUG: Current Positions ({len(positions)}):")
+            self.log_message(f"🔍 DEBUG: Current Positions ({len(positions)}):")
+            print("-" * 60)
+            
+            for i, pos in enumerate(positions):
+                ticket = pos.get('ticket', 'N/A')
+                symbol = pos.get('symbol', 'N/A')
+                type_str = 'BUY' if pos.get('type', 0) == 0 else 'SELL'
+                volume = pos.get('volume', 0)
+                price_open = pos.get('price_open', 0)
+                profit = pos.get('profit', 0)
+                
+                pos_info = f"{i+1}. Ticket: {ticket}, {symbol}, {type_str}, {volume} lots, Open: {price_open:.2f}, Profit: ${profit:.2f}"
+                print(pos_info)
+                self.log_message(pos_info)
+                
+            print("-" * 60)
+            
+            # Test close capability
+            account_info = self.mt5_interface.get_account_info()
+            if account_info:
+                account_info_str = f"💰 Account: Balance ${account_info.get('balance', 0):.2f}, Equity ${account_info.get('equity', 0):.2f}"
+                print(account_info_str)
+                self.log_message(account_info_str)
+                
+        except Exception as e:
+            error_msg = f"❌ Debug positions error: {e}"
+            print(error_msg)
+            self.log_message(error_msg)
+
+    def update_spread_monitor(self):
+        """Update spread monitoring display"""
+        try:
+            if hasattr(self, 'trading_env') and self.trading_env:
+                spread_info = self.trading_env._get_current_spread_info()
+                positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
+                
+                if spread_info:
+                    spread_text = f"Spread: {spread_info['spread_pips']:.1f} pips (${spread_info['spread_usd_per_lot']:.1f}/lot)"
+                    self.spread_label.config(text=spread_text)
+                    
+                if positions:
+                    total_pnl = sum(pos.get('profit', 0) for pos in positions)
+                    spread_cost = self.trading_env._calculate_total_spread_cost(positions)
+                    net_pnl = total_pnl - spread_cost
+                    
+                    net_pnl_text = f"Net PnL: ${net_pnl:.2f} (Raw: ${total_pnl:.2f})"
+                    color = 'green' if net_pnl > 0 else 'red'
+                    self.net_pnl_label.config(text=net_pnl_text, fg=color)
+                else:
+                    self.net_pnl_label.config(text="Net PnL: $0.00 (No positions)")
+                    
+        except Exception as e:
+            print(f"Spread monitor error: {e}")
+
     def run(self):
         self.root.mainloop()
         

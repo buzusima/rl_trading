@@ -319,12 +319,13 @@ class MT5Interface:
                     
         print("All filling modes failed")
         return False
+   
     def _execute_order(self, symbol: str, order_type: str, volume: float, 
-                      price: float = None, sl: float = None, tp: float = None,
-                      comment: str = "RL Trading", magic: int = None, 
-                      filling_mode: int = None):
+                    price: float = None, sl: float = None, tp: float = None,
+                    comment: str = "RL Trading", magic: int = None, 
+                    filling_mode: int = None):
         """
-        Execute order with specified filling mode
+        Execute order with SELL filling mode FIX
         """
         try:
             self._rate_limit()
@@ -366,59 +367,112 @@ class MT5Interface:
                 self.last_error = f"Invalid order type: {order_type}"
                 return False
                 
-            # Use provided filling mode or get best one
-            if filling_mode is None:
-                filling_mode = self.get_symbol_filling_mode(symbol)
+            # 🔥 SPECIAL HANDLING FOR SELL ORDERS
+            if order_type.lower() == 'sell':
+                print(f"🔍 SELL Order Debug: {order_type} {volume} {symbol} at {price}")
                 
-            # Prepare request
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL if order_type.lower() in ['buy', 'sell'] else mt5.TRADE_ACTION_PENDING,
-                "symbol": symbol,
-                "volume": volume,
-                "type": mt5_order_type,
-                "price": price,
-                "deviation": self.slippage,
-                "magic": magic or self.magic_number,
-                "comment": comment,
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": filling_mode,
-            }
-            
-            # Add SL/TP if provided
-            if sl is not None:
-                request["sl"] = sl
-            if tp is not None:
-                request["tp"] = tp
+                # Force specific filling modes for SELL
+                filling_modes_to_try = [
+                    mt5.ORDER_FILLING_IOC,    # Try IOC first
+                    mt5.ORDER_FILLING_FOK,    # Then FOK
+                    mt5.ORDER_FILLING_RETURN  # Finally RETURN
+                ]
                 
-            # Send order
-            result = mt5.order_send(request)
-            
-            if result is None:
-                self.last_error = "Order send failed - no result"
-                return False
-                
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                self.last_error = f"Order failed: {result.retcode} - {result.comment}"
-                
-                # Log the filling mode that failed
-                filling_name = "UNKNOWN"
-                if filling_mode == mt5.ORDER_FILLING_FOK:
-                    filling_name = "FOK"
-                elif filling_mode == mt5.ORDER_FILLING_IOC:
-                    filling_name = "IOC"
-                elif filling_mode == mt5.ORDER_FILLING_RETURN:
-                    filling_name = "RETURN"
+                for fill_mode in filling_modes_to_try:
+                    # Prepare SELL request
+                    request = {
+                        "action": mt5.TRADE_ACTION_DEAL,
+                        "symbol": symbol,
+                        "volume": volume,
+                        "type": mt5_order_type,
+                        "price": price,
+                        "deviation": self.slippage,
+                        "magic": magic or self.magic_number,
+                        "comment": comment + " SELL",
+                        "type_time": mt5.ORDER_TIME_GTC,
+                        "type_filling": fill_mode,
+                    }
                     
-                print(f"Order failed with {filling_name} filling mode: {result.comment}")
+                    # Add SL/TP if provided
+                    if sl is not None:
+                        request["sl"] = sl
+                    if tp is not None:
+                        request["tp"] = tp
+                    
+                    # Try sending SELL order
+                    result = mt5.order_send(request)
+                    
+                    if result is None:
+                        continue  # Try next filling mode
+                        
+                    if result.retcode == mt5.TRADE_RETCODE_DONE:
+                        filling_name = "IOC" if fill_mode == mt5.ORDER_FILLING_IOC else "FOK" if fill_mode == mt5.ORDER_FILLING_FOK else "RETURN"
+                        print(f"✅ SELL Order successful with {filling_name}: {volume} {symbol} at {price}")
+                        return True
+                    else:
+                        filling_name = "IOC" if fill_mode == mt5.ORDER_FILLING_IOC else "FOK" if fill_mode == mt5.ORDER_FILLING_FOK else "RETURN"
+                        print(f"❌ SELL failed with {filling_name}: {result.retcode} - {result.comment}")
+                        
+                # If all SELL attempts failed
+                self.last_error = f"All SELL filling modes failed for {symbol}"
                 return False
                 
-            print(f"Order placed successfully - {order_type} {volume} {symbol} at {price}")
-            return True
-            
+            else:
+                # 🔥 NORMAL HANDLING FOR BUY ORDERS (working fine)
+                
+                # Use provided filling mode or get best one
+                if filling_mode is None:
+                    filling_mode = self.get_symbol_filling_mode(symbol)
+                    
+                # Prepare BUY request
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL if order_type.lower() in ['buy', 'sell'] else mt5.TRADE_ACTION_PENDING,
+                    "symbol": symbol,
+                    "volume": volume,
+                    "type": mt5_order_type,
+                    "price": price,
+                    "deviation": self.slippage,
+                    "magic": magic or self.magic_number,
+                    "comment": comment,
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": filling_mode,
+                }
+                
+                # Add SL/TP if provided
+                if sl is not None:
+                    request["sl"] = sl
+                if tp is not None:
+                    request["tp"] = tp
+                    
+                # Send BUY order
+                result = mt5.order_send(request)
+                
+                if result is None:
+                    self.last_error = "Order send failed - no result"
+                    return False
+                    
+                if result.retcode != mt5.TRADE_RETCODE_DONE:
+                    self.last_error = f"Order failed: {result.retcode} - {result.comment}"
+                    
+                    # Log the filling mode that failed
+                    filling_name = "UNKNOWN"
+                    if filling_mode == mt5.ORDER_FILLING_FOK:
+                        filling_name = "FOK"
+                    elif filling_mode == mt5.ORDER_FILLING_IOC:
+                        filling_name = "IOC"
+                    elif filling_mode == mt5.ORDER_FILLING_RETURN:
+                        filling_name = "RETURN"
+                        
+                    print(f"BUY Order failed with {filling_name} filling mode: {result.comment}")
+                    return False
+                    
+                print(f"✅ BUY Order placed successfully - {order_type} {volume} {symbol} at {price}")
+                return True
+                
         except Exception as e:
             self.last_error = f"Error placing order: {str(e)}"
             return False
-            
+                
     def place_order(self, symbol: str, order_type: str, volume: float, 
                    price: float = None, sl: float = None, tp: float = None,
                    comment: str = "RL Trading", magic: int = None):

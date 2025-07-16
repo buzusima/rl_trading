@@ -157,8 +157,8 @@ class TradingEnvironment(gym.Env):
         
         return observation, reward, done, False, info
         
-
     def _execute_action(self, action_type, lot_multiplier, recovery_action):
+
         """Execute the trading action and return reward - DEBUG VERSION"""
         reward = 0.0
         
@@ -497,32 +497,39 @@ class TradingEnvironment(gym.Env):
         return 1.5
         
     def _get_observation(self):
-        """Get SMART observation that makes AI intelligent"""
+        """Get SMART observation that makes AI intelligent - FIXED"""
         observation = np.zeros(30, dtype=np.float32)
         
         try:
+            # 🔧 INITIALIZE VARIABLES SAFELY
+            prices = []  # ← เพิ่มบรรทัดนี้
+            
             # 🧠 SMART MARKET ANALYSIS
             current_price = self._get_current_price()
             positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
             
-            if current_price and len(self.market_data_cache) >= 10:
+            if current_price and hasattr(self, 'market_data_cache') and len(self.market_data_cache) >= 10:
                 recent_data = self.market_data_cache[-10:]
                 prices = [data['close'] for data in recent_data]
                 
                 # 📈 TREND DETECTION (ฉลาดขึ้น)
                 if len(prices) >= 5:
-                    # Short term trend (last 3 bars)
-                    short_trend = (prices[-1] - prices[-3]) / prices[-3]
-                    observation[0] = short_trend * 10  # Amplify signal
+                    # Short term trend (last 3 bars) - เพิ่ม safety check
+                    if len(prices) >= 3 and prices[-3] != 0:
+                        short_trend = (prices[-1] - prices[-3]) / prices[-3]
+                        observation[0] = short_trend * 10  # Amplify signal
                     
-                    # Medium term trend (last 5 bars)  
-                    medium_trend = (prices[-1] - prices[-5]) / prices[-5]
-                    observation[1] = medium_trend * 10
+                    # Medium term trend (last 5 bars) - เพิ่ม safety check  
+                    if len(prices) >= 5 and prices[-5] != 0:
+                        medium_trend = (prices[-1] - prices[-5]) / prices[-5]
+                        observation[1] = medium_trend * 10
                     
-                    # Trend strength
-                    price_changes = np.diff(prices[-5:])
-                    trend_consistency = len([x for x in price_changes if x > 0]) / len(price_changes)
-                    observation[2] = (trend_consistency - 0.5) * 4  # -2 to +2
+                    # Trend strength - เพิ่ม safety check
+                    if len(prices) >= 5:
+                        price_changes = np.diff(prices[-5:])
+                        if len(price_changes) > 0:  # ← เพิ่ม check นี้
+                            trend_consistency = len([x for x in price_changes if x > 0]) / len(price_changes)
+                            observation[2] = (trend_consistency - 0.5) * 4  # -2 to +2
             
             # 💰 PROFIT/LOSS INTELLIGENCE
             if positions:
@@ -557,21 +564,25 @@ class TradingEnvironment(gym.Env):
                 
             # 🔥 INTELLIGENT SIGNALS (ทำให้ AI ฉลาด)
             
-            # Momentum signal
-            if len(self.market_data_cache) >= 3:
+            # Momentum signal - เพิ่ม safety check
+            if hasattr(self, 'market_data_cache') and len(self.market_data_cache) >= 3:
                 recent_prices = [data['close'] for data in self.market_data_cache[-3:]]
-                if recent_prices[-1] > recent_prices[-2] > recent_prices[-3]:
-                    observation[25] = 1.5  # Strong BUY signal
-                elif recent_prices[-1] < recent_prices[-2] < recent_prices[-3]:
-                    observation[26] = 1.5  # Strong SELL signal
-                    
-            # Volatility signal
-            if len(prices) >= 5:
-                volatility = np.std(prices[-5:]) / np.mean(prices[-5:])
-                if volatility > 0.01:  # High volatility
-                    observation[27] = -1.0  # Avoid trading
-                else:
-                    observation[27] = 0.5   # Good for trading
+                if len(recent_prices) >= 3:  # ← เพิ่ม check นี้
+                    if recent_prices[-1] > recent_prices[-2] > recent_prices[-3]:
+                        observation[25] = 1.5  # Strong BUY signal
+                    elif recent_prices[-1] < recent_prices[-2] < recent_prices[-3]:
+                        observation[26] = 1.5  # Strong SELL signal
+                        
+            # Volatility signal - เพิ่ม safety check
+            if len(prices) >= 5:  # ← ใช้ prices ที่ define แล้ว
+                try:
+                    volatility = np.std(prices[-5:]) / np.mean(prices[-5:])
+                    if volatility > 0.01:  # High volatility
+                        observation[27] = -1.0  # Avoid trading
+                    else:
+                        observation[27] = 0.5   # Good for trading
+                except (ZeroDivisionError, ValueError):
+                    observation[27] = 0.0  # Default if calculation fails
                     
             # 🎲 REDUCE RANDOMNESS (ให้ Logic มากกว่า Random)
             observation[28] = self.current_step % 10 / 10.0  # Predictable cycle

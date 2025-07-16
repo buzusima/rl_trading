@@ -126,6 +126,7 @@ class TradingCallback(BaseCallback):
             print("Final model saved")
         except Exception as e:
             print(f"Final save error: {e}")
+
 class GUIProgressCallback(BaseCallback):
     """Custom callback for GUI progress updates"""
     
@@ -205,11 +206,38 @@ class RLAgent:
         
     def initialize_model(self):
         """
-        Initialize the RL model based on configuration
+        Initialize the RL model based on configuration - FIXED VERSION
         """
         try:
-            # Wrap environment
-            vec_env = DummyVecEnv([lambda: Monitor(self.env, self.log_path)])
+            # Debug environment observation space
+            print(f"Environment observation space: {self.env.observation_space}")
+            print(f"Environment observation shape: {self.env.observation_space.shape}")
+            
+            # Test environment reset to ensure compatibility
+            try:
+                obs, info = self.env.reset()
+                print(f"Environment reset successful - observation shape: {obs.shape}")
+            except Exception as e:
+                print(f"Environment reset failed: {e}")
+                raise e
+            
+            # Create vec_env with proper environment
+            def make_env():
+                return Monitor(self.env, self.log_path)
+            
+            vec_env = DummyVecEnv([make_env])
+            
+            # Verify vec_env observation space
+            print(f"VecEnv observation space: {vec_env.observation_space}")
+            print(f"VecEnv observation shape: {vec_env.observation_space.shape}")
+            
+            # Test vec_env reset
+            try:
+                vec_obs = vec_env.reset()
+                print(f"VecEnv reset successful - observation shape: {vec_obs.shape}")
+            except Exception as e:
+                print(f"VecEnv reset failed: {e}")
+                raise e
             
             # Model-specific parameters
             if self.algorithm.upper() == 'PPO':
@@ -268,10 +296,15 @@ class RLAgent:
             else:
                 raise ValueError(f"Unsupported algorithm: {self.algorithm}")
                 
-            print(f"Initialized {self.algorithm} model with {self.policy} policy")
+            print(f"✅ Initialized {self.algorithm} model successfully")
+            print(f"   - Policy: {self.policy}")
+            print(f"   - Observation space: {vec_env.observation_space.shape}")
+            print(f"   - Action space: {vec_env.action_space}")
             
         except Exception as e:
-            print(f"Error initializing model: {str(e)}")
+            print(f"❌ Error initializing model: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.model = None
             
     def train(self, total_timesteps: int = None, callback: Callable = None):

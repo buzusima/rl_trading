@@ -29,7 +29,16 @@ class MT5Interface:
         # Rate limiting
         self.last_request_time = 0
         self.min_request_interval = 0.1  # seconds between requests
-        
+    
+    def set_training_mode(self, is_training=True):
+        """Set training mode to bypass unnecessary checks"""
+        self.training_mode = is_training
+        if is_training:
+            self.min_request_interval = 0.01  # เร็วขึ้น
+            print("MT5 Interface: Training mode enabled")
+        else:
+            self.min_request_interval = 0.1   # ปกติ
+            print("MT5 Interface: Live mode enabled")    
     def connect(self, login: int = None, password: str = None, server: str = None):
         """
         Connect to MetaTrader 5
@@ -80,6 +89,8 @@ class MT5Interface:
         """
         Implement rate limiting for API requests
         """
+        if hasattr(self, 'training_mode') and self.training_mode:
+            return
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         

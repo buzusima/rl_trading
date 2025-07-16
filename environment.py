@@ -38,11 +38,11 @@ class TradingEnvironment(gym.Env):
         # Account info: balance, equity, margin, etc. (10 features)
         # Recovery info: recovery level, drawdown, etc. (10 features)
         self.observation_space = spaces.Box(
-            low=np.array([-10.0] * 92, dtype=np.float32), 
-            high=np.array([10.0] * 92, dtype=np.float32), 
-            shape=(92,),  
+            low=np.array([-10.0] * 30, dtype=np.float32),  # ← ตรวจสอบว่าเป็น 30 หรือยัง
+            high=np.array([10.0] * 30, dtype=np.float32), 
+            shape=(30,),  # ← ตรวจสอบว่าเป็น 30 หรือยัง
             dtype=np.float32
-        )       
+        )        
         # Action space: [action_type, lot_multiplier, recovery_action]
         # action_type: 0=hold, 1=buy, 2=sell, 3=close_all, 4=hedge
         # lot_multiplier: 0.5 to 3.0 (for position sizing)
@@ -74,6 +74,7 @@ class TradingEnvironment(gym.Env):
         self.total_trades = 0
         self.winning_trades = 0
         self.simulated_positions = []  # เก็บ position จำลอง
+    
     def reset(self, seed=None, options=None):
         """Reset the environment to initial state"""
         super().reset(seed=seed)
@@ -101,12 +102,38 @@ class TradingEnvironment(gym.Env):
         
         # Get initial observation
         observation = self._get_observation()
-        info = self._get_info()
-        
+        info = {  # ← ใช้ dict ธรรมดา
+                'current_step': 0,
+                'episode_pnl': 0.0,
+                'account_balance': 0,
+                'account_equity': 0,
+                'open_positions': 0,
+                'recovery_active': False,
+                'recovery_level': 0,
+                'market_status': 'open'
+        }
+            
         return observation, info
         
     def step(self, action):
         """Execute one step in the environment"""
+        if not self.is_market_open():
+            observation = self._get_observation()
+            reward = 0.0
+            done = False
+            info = {  # ← ใช้ dict ธรรมดาแทน
+                    'current_step': self.current_step,
+                    'market_status': 'closed',
+                    'episode_pnl': 0,
+                    'account_balance': 0,
+                    'account_equity': 0,
+                    'open_positions': 0,
+                    'recovery_active': False,
+                    'recovery_level': 0
+            }
+            print("MARKET CLOSED - Pausing training")
+            return observation, reward, done, False, info 
+        
         self.current_step += 1
         
         # Parse action
@@ -1231,7 +1258,106 @@ class TradingEnvironment(gym.Env):
                     
         except Exception as e:
             print(f"Error updating recovery status: {e}")
+
+    def _is_episode_done(self):
+        """Check if episode should end"""
+        try:
+            # End if maximum steps reached
+            if self.current_step >= self.max_steps:
+                return True
+                
+            # End if account equity is too low
+            account_info = self.mt5_interface.get_account_info()
+            if account_info:
+                equity = account_info.get('equity', 0)
+                balance = account_info.get('balance', 0)
+                if equity < balance * 0.3:  # 70% drawdown
+                    return True
+                    
+            # End if recovery failed multiple times
+            if self.recovery_level > 5:
+                return True
+                
+            return False
             
+        except:
+            return False
+
+    def _get_current_pnl(self):
+        """Get current unrealized PnL"""
+        try:
+            positions = self.mt5_interface.get_positions()
+            return sum(pos.get('profit', 0) for pos in positions)
+        except:
+            return 0.0
+
+    def _get_info(self):
+        """Get additional info for the step"""
+        try:
+            account_info = self.mt5_interface.get_account_info()
+            positions = self.mt5_interface.get_positions()
+            
+            info = {
+                'current_step': self.current_step,
+                'episode_pnl': self._get_current_pnl(),
+                'account_balance': account_info.get('balance', 0) if account_info else 0,
+                'account_equity': account_info.get('equity', 0) if account_info else 0,
+                'open_positions': len(positions) if positions else 0,
+                'recovery_active': self.recovery_active,
+                'recovery_level': self.recovery_level,
+                'max_drawdown': getattr(self, 'max_drawdown', 0),
+                'total_trades': getattr(self, 'total_trades', 0),
+                'winning_trades': getattr(self, 'winning_trades', 0)
+            }
+            
+            return info
+            
+        except:
+            return {
+                'current_step': self.current_step,
+                'episode_pnl': 0,
+                'account_balance': 0,
+                'account_equity': 0,
+                'open_positions': 0,
+                'recovery_active': False,
+                'recovery_level': 0
+            }
+    def is_market_open(self):
+        """Check if XAUUSD market is open"""
+        try:
+            from datetime import datetime
+            import pytz
+            
+            # Get current time in different timezones
+            utc_now = datetime.now(pytz.UTC)
+            
+            # XAUUSD trades 24/5 (Sunday 22:00 GMT - Friday 21:00 GMT)
+            weekday = utc_now.weekday()  # 0=Monday, 6=Sunday
+            hour = utc_now.hour
+            
+            # Friday 21:00 GMT to Sunday 22:00 GMT = Market Closed
+            if weekday == 4 and hour >= 21:  # Friday after 21:00
+                return False
+            elif weekday == 5:  # Saturday (all day closed)
+                return False  
+            elif weekday == 6 and hour < 22:  # Sunday before 22:00
+                return False
+                
+            # News/Holiday hours (optional)
+            if hour in [12, 13, 14, 20, 21]:  # ช่วง news
+                minute = utc_now.minute
+                if 25 <= minute <= 35:  # หยุด 10 นาทีช่วง news
+                    return False
+                    
+            return True
+            
+        except Exception as e:
+            print(f"Market hours check error: {e}")
+            return True  # Default to open if error
+
+def _is_episode_done(self):
+    # ... existing code ...    
+
     def _is_episode_done(self):
         """Check if episode should end"""
         try:

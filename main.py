@@ -344,7 +344,10 @@ class TradingGUI:
                                           command=self.pause_training, 
                                           state='disabled')
         self.pause_training_btn.pack(side='left', padx=5)
-        
+        self.save_model_btn = tk.Button(training_control, text="Save Model Now", 
+                                   command=self.save_model_manual,
+                                   bg='lightgreen')
+        self.save_model_btn.pack(side='left', padx=5)
         # Training Progress Frame
         progress_frame = ttk.LabelFrame(self.training_frame, text="Training Progress")
         progress_frame.pack(fill='x', padx=10, pady=5)
@@ -411,15 +414,27 @@ class TradingGUI:
             return
             
         try:
+            print("DEBUG: Starting LIVE trading...")
+            
+            # เปลี่ยนเป็น LIVE MODE
+            self.config['training_mode'] = False  # ← เพิ่มบรรทัดนี้
+            
+            # Set live mode for MT5 interface
+            self.mt5_interface.set_training_mode(False)  # ← เพิ่มบรรทัดนี้
+            
             # Initialize trading environment and RL agent
             self.trading_env = TradingEnvironment(self.mt5_interface, self.recovery_engine, self.config)
             self.rl_agent = RLAgent(self.trading_env, self.config)
             
-            # Load trained model if available
+            # Load trained model if available - ปรับปรุงข้อความ
             if self.rl_agent.load_model():
-                self.log_message("Loaded trained model")
+                self.log_message("✅ AI Model loaded successfully!")
+                messagebox.showinfo("Success", "AI Trading Model Loaded!")  # ← เพิ่มบรรทัดนี้
             else:
-                self.log_message("No trained model found, using random actions")
+                self.log_message("⚠️ No trained model found - using random actions")
+                result = messagebox.askyesno("Warning", "No AI model found!\nContinue with random actions?")  # ← เพิ่มบรรทัดนี้
+                if not result:  # ← เพิ่มบรรทัดนี้
+                    return  # ← เพิ่มบรรทัดนี้
                 
             self.is_trading = True
             self.start_trading_btn.config(state='disabled')
@@ -430,12 +445,12 @@ class TradingGUI:
             self.trading_thread.daemon = True
             self.trading_thread.start()
             
-            self.log_message("Trading started")
+            self.log_message("🚀 LIVE AI Trading Started!")  # ← ปรับปรุงข้อความ
             
         except Exception as e:
             self.log_message(f"Error starting trading: {str(e)}")
             messagebox.showerror("Trading Error", f"Error: {str(e)}")
-            
+
     def stop_trading(self):
         self.is_trading = False
         self.start_trading_btn.config(state='normal')
@@ -543,12 +558,14 @@ class TradingGUI:
     def trading_loop(self):
         while self.is_trading:
             try:
-                # Get market data
-                market_data = self.mt5_interface.get_market_data()
-                
+                # Get observation from environment (แทน market_data)
+                observation = self.trading_env._get_observation()
+                self.log_message(f"🔍 Observation updated: {observation[:5]}...")  # ← เพิ่ม
+
                 # Get RL agent decision
-                action = self.rl_agent.get_action(market_data)
-                
+                action = self.rl_agent.get_action(observation)
+                self.log_message(f"🤖 AI Decision: {action}")  # ← เพิ่ม
+
                 # Execute action
                 self.execute_action(action)
                 
@@ -560,7 +577,7 @@ class TradingGUI:
                 
             except Exception as e:
                 self.log_message(f"Trading loop error: {str(e)}")
-                
+
     def training_loop(self):
         try:
             print("DEBUG: Inside training_loop")
@@ -662,7 +679,28 @@ class TradingGUI:
         
     def clear_logs(self):
         self.log_text.delete(1.0, tk.END)
-        
+
+    def save_model_manual(self):
+        """Save current model manually"""
+        try:
+            if hasattr(self, 'rl_agent') and self.rl_agent and self.rl_agent.model:
+                # Save model
+                save_path = self.rl_agent.save_model("manual_save")
+                
+                if save_path:
+                    self.log_message(f"✅ Model saved successfully: {save_path}")
+                    messagebox.showinfo("Success", f"Model saved!\nPath: {save_path}.zip")
+                else:
+                    self.log_message("❌ Failed to save model")
+                    messagebox.showerror("Error", "Failed to save model")
+            else:
+                self.log_message("❌ No model to save")
+                messagebox.showwarning("Warning", "No trained model found in memory")
+                
+        except Exception as e:
+            self.log_message(f"Save error: {str(e)}")
+            messagebox.showerror("Error", f"Save error: {str(e)}")
+
     def save_config(self):
         """Save current configuration including profit settings"""
         config = {
@@ -705,7 +743,7 @@ class TradingGUI:
                 'recovery_type': 'Martingale',
                 'algorithm': 'PPO',
                 'learning_rate': 0.0003,
-                'training_steps': 10000,
+                'training_steps': 1000,
                 'training_mode': True,
                 # Default profit settings - เก็บกำไรเร็วขึ้น
                 'min_profit_target': 25,

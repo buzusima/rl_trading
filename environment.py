@@ -6,7 +6,7 @@ import pandas as pd
 from typing import Dict, List, Tuple, Any
 import MetaTrader5 as mt5
 from datetime import datetime, timedelta
-
+import time
 class TradingEnvironment(gym.Env):
     """
     Custom Gymnasium environment for XAUUSD trading with recovery system
@@ -123,7 +123,6 @@ class TradingEnvironment(gym.Env):
             done = False
             info = {  # ← ใช้ dict ธรรมดาแทน
                     'current_step': self.current_step,
-                    'market_status': 'closed',
                     'episode_pnl': 0,
                     'account_balance': 0,
                     'account_equity': 0,
@@ -137,7 +136,7 @@ class TradingEnvironment(gym.Env):
         self.current_step += 1
         
         # Parse action
-        action_type = int(action[0])
+        action_type = float(action[0])
         lot_multiplier = float(action[1])
         recovery_action = int(action[2])
         
@@ -158,21 +157,32 @@ class TradingEnvironment(gym.Env):
         
         return observation, reward, done, False, info
         
+
     def _execute_action(self, action_type, lot_multiplier, recovery_action):
-        """Execute the trading action and return reward"""
+        """Execute the trading action and return reward - DEBUG VERSION"""
         reward = 0.0
+        
+        # 🔍 DEBUG: แสดงค่าที่ได้รับ
+        print(f"🔍 DEBUG _execute_action called:")
+        print(f"   action_type: {action_type} (type: {type(action_type)})")
+        print(f"   lot_multiplier: {lot_multiplier}")
+        print(f"   recovery_action: {recovery_action}")
         
         try:
             # Get current market data
             current_price = self._get_current_price()
             if current_price is None:
-                return -1.0  # Penalty for invalid market data
+                print("❌ ERROR: current_price is None")
+                return -1.0
             
             # Check if in training mode
             is_training_mode = self.config.get('training_mode', True)
+            print(f"🔍 DEBUG training_mode: {is_training_mode}")
             
             if not is_training_mode:
                 # Live trading mode - execute real orders
+                print("🔍 DEBUG: Live trading mode - checking profit signals")
+                
                 # Check for profit taking opportunities FIRST
                 profit_signals = self.recovery_engine.check_profit_opportunities(
                     self.mt5_interface, self.symbol
@@ -186,7 +196,8 @@ class TradingEnvironment(gym.Env):
                     # Reward for successful profit taking
                     if executed_profits:
                         total_profit_taken = sum(action.get('profit', 0) for action in executed_profits)
-                        reward += total_profit_taken / 50.0  # Scale reward
+                        reward += total_profit_taken / 50.0
+                        print(f"💰 Profit taken: {total_profit_taken}")
                         
                 # Check smart profit strategy
                 smart_profit_taken = self.recovery_engine.smart_profit_strategy(
@@ -194,7 +205,8 @@ class TradingEnvironment(gym.Env):
                 )
                 
                 if smart_profit_taken:
-                    reward += 3.0  # Bonus for smart profit taking
+                    reward += 3.0
+                    print(f"💰 Smart profit taken")
             
             # Calculate position size
             base_lot_size = self.initial_lot_size
@@ -204,26 +216,31 @@ class TradingEnvironment(gym.Env):
                 )
             
             lot_size = base_lot_size * lot_multiplier
-            lot_size = max(0.01, min(lot_size, 10.0))  # Limit lot size
-            # Round to valid MT5 lot size (0.01 increments)
+            lot_size = max(0.01, min(lot_size, 10.0))
             lot_size = round(lot_size / 0.01) * 0.01
-            lot_size = max(0.01, lot_size)  # Ensure minimum 0.01
+            lot_size = max(0.01, lot_size)
+            
+            print(f"🔍 DEBUG lot_size calculated: {lot_size}")
 
-            # Execute action based on type
-            if action_type == 0:  # Hold
+            # 🔥 DECISION LOGIC - ตรวจสอบทุก condition
+            print(f"🔍 DEBUG: Checking action conditions...")
+            
+            if action_type < 0.3:
+                print(f"🟡 HOLD: action_type {action_type} < 0.3")
                 if is_training_mode:
                     reward += self._calculate_simulated_hold_reward()
                 else:
                     reward += self._calculate_hold_reward()
                     
-            elif action_type == 1:  # Buy
+            elif 0.3 <= action_type < 1.7:
+                print(f"🟢 BUY CONDITION MET: {action_type} >= 0.3")
                 if is_training_mode:
-                    # Training mode - simulate with REAL reward calculation
+                    print("🔍 DEBUG: Training mode - simulating BUY")
                     success = True
                     reward += self._calculate_simulated_trade_reward('buy', lot_size, current_price)
-                    print(f"SIMULATED BUY: {lot_size} {self.symbol} at {current_price:.2f}, Reward: {reward:.3f}")
+                    print(f"🔥 SIMULATED BUY: {lot_size} {self.symbol} at {current_price:.2f}, Action: {action_type:.3f}")
                 else:
-                    # Live mode - real order
+                    print("🔍 DEBUG: Live mode - executing real BUY")
                     success = self.mt5_interface.place_order(
                         symbol=self.symbol,
                         order_type='buy',
@@ -231,15 +248,18 @@ class TradingEnvironment(gym.Env):
                         price=current_price
                     )
                     reward += self._calculate_trade_reward(success, 'buy', lot_size)
+                    if success:
+                        print(f"🚀 LIVE BUY EXECUTED: {lot_size} {self.symbol} at {current_price:.2f}")
+                    else:
+                        print(f"❌ LIVE BUY FAILED: {lot_size} {self.symbol}")
                     
-            elif action_type == 2:  # Sell
+            elif 1.7 <= action_type < 2.7:
+                print(f"🔴 SELL CONDITION MET: {action_type} >= 1.7")
                 if is_training_mode:
-                    # Training mode - simulate with REAL reward calculation
                     success = True
                     reward += self._calculate_simulated_trade_reward('sell', lot_size, current_price)
-                    print(f"SIMULATED SELL: {lot_size} {self.symbol} at {current_price:.2f}, Reward: {reward:.3f}")
+                    print(f"🔥 SIMULATED SELL: {lot_size} {self.symbol} at {current_price:.2f}")
                 else:
-                    # Live mode - real order
                     success = self.mt5_interface.place_order(
                         symbol=self.symbol,
                         order_type='sell',
@@ -247,114 +267,144 @@ class TradingEnvironment(gym.Env):
                         price=current_price
                     )
                     reward += self._calculate_trade_reward(success, 'sell', lot_size)
+                    if success:
+                        print(f"🚀 LIVE SELL EXECUTED: {lot_size} {self.symbol}")
+                    else:
+                        print(f"❌ LIVE SELL FAILED: {lot_size} {self.symbol}")
                     
-            elif action_type == 3:  # Close all positions (PROFIT TAKING)
+            elif 2.7 <= action_type < 3.5:
+                print(f"💰 CLOSE CONDITION MET: {action_type} >= 2.7")
                 if is_training_mode:
-                    # Training mode - simulate with REAL reward calculation
                     success = True
                     reward += self._calculate_simulated_close_reward()
-                    print(f"SIMULATED CLOSE ALL: {self.symbol}, Reward: {reward:.3f}")
+                    print(f"🔥 SIMULATED CLOSE: {self.symbol}")
                 else:
-                    # Live mode - real close
                     success = self.mt5_interface.close_all_positions(self.symbol)
                     reward += self._calculate_close_reward(success)
-                    
                     current_pnl = self._get_current_pnl()
                     if current_pnl > 0:
-                        reward += 2.0 + (current_pnl / 100.0)  # Bonus for profitable close
-                    
-            elif action_type == 4:  # Hedge
+                        reward += 2.0 + (current_pnl / 100.0)
+                    if success:
+                        print(f"🚀 LIVE CLOSE EXECUTED: {self.symbol}")
+                    else:
+                        print(f"❌ LIVE CLOSE FAILED: {self.symbol}")
+                        
+            elif action_type >= 3.5:
+                print(f"🛡️ HEDGE CONDITION MET: {action_type} >= 3.5")
                 if is_training_mode:
-                    # Training mode - simulate with REAL reward calculation
                     success = True
                     reward += self._calculate_simulated_hedge_reward(lot_size)
-                    print(f"SIMULATED HEDGE: {lot_size} {self.symbol}, Reward: {reward:.3f}")
+                    print(f"🔥 SIMULATED HEDGE: {lot_size} {self.symbol}")
                 else:
-                    # Live mode - real hedge
                     success = self._execute_hedge_action(lot_size)
                     reward += self._calculate_hedge_reward(success)
+                    if success:
+                        print(f"🚀 LIVE HEDGE EXECUTED: {lot_size} {self.symbol}")
+                    else:
+                        print(f"❌ LIVE HEDGE FAILED: {lot_size} {self.symbol}")
             
-            # Execute recovery action if needed (only in live mode)
+            else:
+                print(f"❓ UNKNOWN ACTION: {action_type}")
+            
+            # Execute recovery action if needed
             if not is_training_mode and recovery_action > 0 and self._should_activate_recovery():
+                print(f"🔄 Recovery action: {recovery_action}")
                 self._execute_recovery_action(recovery_action)
                 
             # Update recovery status
             self._update_recovery_status()
             
+            print(f"🔍 DEBUG: Final reward: {reward}")
+            
         except Exception as e:
-            print(f"Error executing action: {e}")
-            reward = -5.0  # Heavy penalty for errors
+            print(f"❌ ERROR in _execute_action: {e}")
+            import traceback
+            traceback.print_exc()
+            reward = -5.0
             
         return reward
 
     # เพิ่ม Methods ใหม่สำหรับ Simulation
     def _calculate_simulated_trade_reward(self, trade_type, lot_size, entry_price):
-        """คำนวณ reward จำลองสำหรับการเทรด"""
+        """Calculate REALISTIC reward based on actual price movement"""
         try:
-            # ใช้ข้อมูลราคาจริงจาก MT5 คำนวณ reward
-            if len(self.market_data_cache) < 3:
-                return 0.1  # Small reward for action
+            if len(self.market_data_cache) < 2:
+                return 0.1
                 
-            # เอาราคา 2-3 bars หลังมาจำลองผลลัพธ์
+            # Get actual price movement
             current_price = self.market_data_cache[-1]['close']
             prev_price = self.market_data_cache[-2]['close']
             
-            # คำนวณการเปลี่ยนแปลงราคา
             price_change = current_price - prev_price
             
-            # จำลอง PnL ตามทิศทางการเทรด
+            # Calculate realistic PnL
             if trade_type == 'buy':
-                simulated_pnl = price_change * lot_size * 100000  # 1 lot = 100,000 units
+                pnl = price_change * lot_size * 100000  # 1 lot = 100,000 units
             else:  # sell
-                simulated_pnl = -price_change * lot_size * 100000
+                pnl = -price_change * lot_size * 100000
                 
-            # แปลง PnL เป็น reward (scale ลง)
-            reward = simulated_pnl / 50.0
+            # Scale reward properly
+            reward = pnl / 10.0  # Scale down
             
-            # เพิ่มปัจจัยอื่นๆ
-            # Bonus สำหรับการเทรดตามเทรนด์
+            # Add trend bonus/penalty
             if len(self.market_data_cache) >= 5:
-                trend = self._get_market_trend()
+                recent_prices = [data['close'] for data in self.market_data_cache[-5:]]
+                trend = np.polyfit(range(5), recent_prices, 1)[0]
+                
                 if (trade_type == 'buy' and trend > 0) or (trade_type == 'sell' and trend < 0):
-                    reward += 0.5  # Bonus for trading with trend
+                    reward += 0.5  # Trend following bonus
+                else:
+                    reward -= 0.2  # Against trend penalty
             
-            # จำกัด reward ไม่ให้สุดโต่ง
-            reward = max(-3.0, min(3.0, reward))
+            # Prevent extreme rewards
+            reward = np.clip(reward, -5.0, 5.0)
             
-            return reward
+            return float(reward)
             
         except Exception as e:
-            print(f"Error calculating simulated trade reward: {e}")
+            print(f"❌ Reward calculation error: {e}")
             return 0.1
 
     def _calculate_simulated_hold_reward(self):
-        """คำนวณ reward สำหรับการ Hold"""
+        """Better hold reward calculation"""
         try:
-            # ถ้าไม่มี position ให้ penalty เล็กน้อย
-            if not hasattr(self, 'simulated_positions') or not self.simulated_positions:
+            positions = getattr(self, 'simulated_positions', [])
+            
+            if not positions:
                 return -0.01  # Small penalty for inaction
                 
-            # ถ้ามี position ให้ reward ตามการเปลี่ยนแปลงราคา
-            total_reward = 0.0
+            # Calculate unrealized PnL
+            current_price = self._get_current_price()
+            total_pnl = 0
             
-            for position in self.simulated_positions:
-                current_price = self._get_current_price()
-                entry_price = position.get('entry_price', current_price)
-                lot_size = position.get('lot_size', 0.01)
-                pos_type = position.get('type', 'buy')
+            for pos in positions:
+                entry_price = pos.get('entry_price', current_price)
+                lot_size = pos.get('lot_size', 0.01)
+                pos_type = pos.get('type', 'buy')
                 
                 if pos_type == 'buy':
                     pnl = (current_price - entry_price) * lot_size * 100000
                 else:
                     pnl = (entry_price - current_price) * lot_size * 100000
                     
-                total_reward += pnl / 100.0
+                total_pnl += pnl
+            
+            # Reward based on PnL trend
+            reward = total_pnl / 100.0
+            
+            # Time penalty (encourage action)
+            if hasattr(self, 'hold_count'):
+                self.hold_count += 1
+                if self.hold_count > 10:
+                    reward -= 0.1  # Penalty for holding too long
+            else:
+                self.hold_count = 1
                 
-            return max(-1.0, min(1.0, total_reward))
+            return np.clip(reward, -1.0, 1.0)
             
         except:
             return -0.01
-
+    
     def _calculate_simulated_close_reward(self):
         """คำนวณ reward สำหรับการปิด position"""
         try:
@@ -447,31 +497,137 @@ class TradingEnvironment(gym.Env):
         return 1.5
         
     def _get_observation(self):
-        """Get current environment observation - SIMPLIFIED"""
+        """Get SMART observation that makes AI intelligent"""
         observation = np.zeros(30, dtype=np.float32)
         
         try:
-            # Market data features (15 features แทน 51)
-            market_features = self._get_simplified_market_features()
-            observation[:15] = market_features
-
-            # Position features (8 features แทน 20) 
-            position_features = self._get_simplified_position_features()
-            observation[15:23] = position_features
-
-            # Account features (4 features แทน 10)
-            account_features = self._get_simplified_account_features()  
-            observation[23:27] = account_features
-
-            # Recovery features (3 features แทน 10)
-            recovery_features = self._get_simplified_recovery_features()
-            observation[27:30] = recovery_features
-
-        except Exception as e:
-            print(f"Error getting observation: {e}")
+            # 🧠 SMART MARKET ANALYSIS
+            current_price = self._get_current_price()
+            positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
             
-        return observation            
+            if current_price and len(self.market_data_cache) >= 10:
+                recent_data = self.market_data_cache[-10:]
+                prices = [data['close'] for data in recent_data]
+                
+                # 📈 TREND DETECTION (ฉลาดขึ้น)
+                if len(prices) >= 5:
+                    # Short term trend (last 3 bars)
+                    short_trend = (prices[-1] - prices[-3]) / prices[-3]
+                    observation[0] = short_trend * 10  # Amplify signal
+                    
+                    # Medium term trend (last 5 bars)  
+                    medium_trend = (prices[-1] - prices[-5]) / prices[-5]
+                    observation[1] = medium_trend * 10
+                    
+                    # Trend strength
+                    price_changes = np.diff(prices[-5:])
+                    trend_consistency = len([x for x in price_changes if x > 0]) / len(price_changes)
+                    observation[2] = (trend_consistency - 0.5) * 4  # -2 to +2
+            
+            # 💰 PROFIT/LOSS INTELLIGENCE
+            if positions:
+                total_pnl = sum(pos.get('profit', 0) for pos in positions)
+                position_count = len(positions)
+                
+                # PnL pressure (ข้อมูลสำคัญ)
+                observation[10] = total_pnl / 50.0  # Normalize PnL
+                observation[11] = position_count / 5.0  # Position pressure
+                
+                # 🚨 RISK SIGNALS (AI ต้องรู้)
+                if total_pnl < -30:
+                    observation[12] = -2.0  # Strong SELL/CLOSE signal
+                elif total_pnl > 30:
+                    observation[13] = 2.0   # Strong CLOSE (take profit) signal
+                    
+                # Position age pressure
+                if position_count > 10:
+                    observation[14] = 2.0   # Too many positions - CLOSE signal
+                    
+            # 🎯 MARKET TIMING (Smart timing)
+            now = datetime.now()
+            hour = now.hour
+            
+            # Market session strength
+            if 8 <= hour <= 12:  # European morning (volatile)
+                observation[20] = 1.5
+            elif 13 <= hour <= 17:  # US morning (trending)
+                observation[21] = 1.5
+            elif 21 <= hour <= 23:  # Asian session (ranging)
+                observation[22] = -0.5  # Less trading
+                
+            # 🔥 INTELLIGENT SIGNALS (ทำให้ AI ฉลาด)
+            
+            # Momentum signal
+            if len(self.market_data_cache) >= 3:
+                recent_prices = [data['close'] for data in self.market_data_cache[-3:]]
+                if recent_prices[-1] > recent_prices[-2] > recent_prices[-3]:
+                    observation[25] = 1.5  # Strong BUY signal
+                elif recent_prices[-1] < recent_prices[-2] < recent_prices[-3]:
+                    observation[26] = 1.5  # Strong SELL signal
+                    
+            # Volatility signal
+            if len(prices) >= 5:
+                volatility = np.std(prices[-5:]) / np.mean(prices[-5:])
+                if volatility > 0.01:  # High volatility
+                    observation[27] = -1.0  # Avoid trading
+                else:
+                    observation[27] = 0.5   # Good for trading
+                    
+            # 🎲 REDUCE RANDOMNESS (ให้ Logic มากกว่า Random)
+            observation[28] = self.current_step % 10 / 10.0  # Predictable cycle
+            observation[29] = 1.0 if positions else 0.0      # Position state
+            
+        except Exception as e:
+            print(f"❌ Smart observation error: {e}")
+            # Fallback to basic signals
+            observation[0] = np.random.choice([-1, 0, 1]) * 0.5  # Basic trend
+            observation[10] = np.random.choice([-0.5, 0, 0.5])   # Basic PnL
+            
+        # 🧠 FINAL INTELLIGENCE CHECK
+        # Make sure AI gets clear signals
+        observation = np.clip(observation, -3.0, 3.0)
+        
+        return observation
 
+    # 🤖 INTELLIGENT ACTION INTERPRETATION (ใน _execute_action)
+    def intelligent_action_logic(self, action_type, positions, total_pnl):
+        """Make AI decisions more intelligent"""
+        
+        # 🧠 SMART DECISION OVERRIDE
+        
+        # If losing badly, force CLOSE
+        if total_pnl < -50:
+            print("🧠 SMART: Heavy loss detected, forcing CLOSE")
+            return 3.0  # Force close
+            
+        # If too many positions, force SELL
+        if len(positions) > 15:
+            print("🧠 SMART: Too many positions, forcing SELL")
+            return 2.5  # Force sell
+            
+        # If good profit, force CLOSE
+        if total_pnl > 50:
+            print("🧠 SMART: Good profit detected, forcing CLOSE")
+            return 3.2  # Force close
+            
+        # Market condition based decisions
+        if hasattr(self, 'market_data_cache') and len(self.market_data_cache) >= 5:
+            recent_prices = [data['close'] for data in self.market_data_cache[-5:]]
+            
+            # Strong downtrend - prefer SELL
+            if all(recent_prices[i] > recent_prices[i+1] for i in range(len(recent_prices)-1)):
+                if 0.5 <= action_type <= 1.5:  # Would be BUY
+                    print("🧠 SMART: Downtrend detected, converting BUY to SELL")
+                    return 2.2  # Convert to SELL
+                    
+            # Strong uptrend - prefer BUY  
+            elif all(recent_prices[i] < recent_prices[i+1] for i in range(len(recent_prices)-1)):
+                if 1.8 <= action_type <= 2.5:  # Would be SELL
+                    print("🧠 SMART: Uptrend detected, converting SELL to BUY")
+                    return 0.8  # Convert to BUY
+        
+        return action_type
+    
     def _get_simplified_market_features(self):
         """Simple market features - เร็วกว่าเดิม"""
         features = np.zeros(15)
@@ -1120,34 +1276,40 @@ class TradingEnvironment(gym.Env):
         return features
         
     def update_market_data(self):
-        """Update market data cache"""
+        """Update market data with REAL data"""
         try:
-            # Get latest market data from MT5
-            rates = self.mt5_interface.get_rates(self.symbol, mt5.TIMEFRAME_M1, 1)
+            import MetaTrader5 as mt5
+            
+            # Force fresh data
+            rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, 1)
             
             if rates is not None and len(rates) > 0:
                 rate = rates[0]
                 market_data = {
                     'time': rate[0],
-                    'open': rate[1],
-                    'high': rate[2],
-                    'low': rate[3],
-                    'close': rate[4],
-                    'volume': rate[5] if len(rate) > 5 else 0
+                    'open': float(rate[1]),
+                    'high': float(rate[2]),
+                    'low': float(rate[3]),
+                    'close': float(rate[4]),
+                    'volume': float(rate[5]) if len(rate) > 5 else 0,
+                    'timestamp': time.time()  # Add timestamp
                 }
                 
-                # Add to cache
+                # Add to cache (keep recent 100)
                 self.market_data_cache.append(market_data)
-                
-                # Keep only recent data
-                if len(self.market_data_cache) > self.lookback_window * 2:
-                    self.market_data_cache = self.market_data_cache[-self.lookback_window:]
+                if len(self.market_data_cache) > 100:
+                    self.market_data_cache = self.market_data_cache[-100:]
                     
-                self.last_update_time = datetime.now()
+                # Debug log
+                print(f"📊 Market Update: {market_data['close']:.2f} at {datetime.now().strftime('%H:%M:%S')}")
+                
+            else:
+                print("⚠️ No market data received")
                 
         except Exception as e:
-            print(f"Error updating market data: {e}")
-            
+            print(f"❌ Market data error: {e}")
+
+
     def _get_current_price(self):
         """Get current market price"""
         try:
@@ -1324,39 +1486,8 @@ class TradingEnvironment(gym.Env):
             }
     def is_market_open(self):
         """Check if XAUUSD market is open"""
-        try:
-            from datetime import datetime
-            import pytz
-            
-            # Get current time in different timezones
-            utc_now = datetime.now(pytz.UTC)
-            
-            # XAUUSD trades 24/5 (Sunday 22:00 GMT - Friday 21:00 GMT)
-            weekday = utc_now.weekday()  # 0=Monday, 6=Sunday
-            hour = utc_now.hour
-            
-            # Friday 21:00 GMT to Sunday 22:00 GMT = Market Closed
-            if weekday == 4 and hour >= 21:  # Friday after 21:00
-                return False
-            elif weekday == 5:  # Saturday (all day closed)
-                return False  
-            elif weekday == 6 and hour < 22:  # Sunday before 22:00
-                return False
-                
-            # News/Holiday hours (optional)
-            if hour in [12, 13, 14, 20, 21]:  # ช่วง news
-                minute = utc_now.minute
-                if 25 <= minute <= 35:  # หยุด 10 นาทีช่วง news
-                    return False
-                    
-            return True
-            
-        except Exception as e:
-            print(f"Market hours check error: {e}")
-            return True  # Default to open if error
+        return True
 
-def _is_episode_done(self):
-    # ... existing code ...    
 
     def _is_episode_done(self):
         """Check if episode should end"""

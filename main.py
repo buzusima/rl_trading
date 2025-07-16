@@ -56,7 +56,28 @@ class TradingGUI:
         # Threading for real-time updates
         self.update_thread = None
         self.training_thread = None
+        self.recent_actions = []  # ← เพิ่มบรรทัดนี้
+    
+    def force_ai_diversity(self, action):
+        """Force AI to have diverse actions"""
         
+        # Add randomness if AI is too repetitive
+        if hasattr(self, 'recent_actions'):
+            self.recent_actions.append(action[0])
+            if len(self.recent_actions) > 10:
+                self.recent_actions = self.recent_actions[-10:]
+                
+            # Check if too repetitive
+            action_variance = np.var(self.recent_actions)
+            if action_variance < 0.01:  # Too similar
+                print(f"🎲 Adding diversity: variance={action_variance:.4f}")
+                action[0] += np.random.normal(0, 0.2)  # Add noise
+                action[0] = np.clip(action[0], 0, 4)
+        else:
+            self.recent_actions = [action[0]]
+        
+        return action
+
     def setup_gui(self):
         # Create main notebook for tabs
         self.notebook = ttk.Notebook(self.root)
@@ -379,20 +400,428 @@ class TradingGUI:
         self.performance_text = tk.Text(metrics_frame)
         self.performance_text.pack(fill='both', expand=True)
         
+    def setup_log_tags(self):
+        """Setup color tags for different log types - FIXED VERSION"""
+        # AI related - Blue theme
+        self.log_text.tag_configure("AI", foreground="#58a6ff", font=('Consolas', 10, 'bold'))
+        self.log_text.tag_configure("AI_VALUE", foreground="#79c0ff", font=('Consolas', 10, 'bold'))
+        
+        # Trading - Green theme  
+        self.log_text.tag_configure("TRADE", foreground="#3fb950", font=('Consolas', 10, 'bold'))
+        self.log_text.tag_configure("SUCCESS", foreground="#56d364", font=('Consolas', 10, 'bold'))
+        
+        # Profit/Money - Yellow/Gold theme
+        self.log_text.tag_configure("PROFIT", foreground="#ffd33d", font=('Consolas', 10, 'bold'))
+        self.log_text.tag_configure("MONEY", foreground="#ffdf5d", font=('Consolas', 10, 'bold'))
+        
+        # Errors - Red theme
+        self.log_text.tag_configure("ERROR", foreground="#f85149", font=('Consolas', 10, 'bold'))
+        self.log_text.tag_configure("CRITICAL", foreground="#ff6b6b", font=('Consolas', 11, 'bold'))
+        
+        # Warnings - Orange theme
+        self.log_text.tag_configure("WARNING", foreground="#f0883e", font=('Consolas', 10, 'bold'))
+        
+        # System - Gray theme
+        self.log_text.tag_configure("SYSTEM", foreground="#8b949e", font=('Consolas', 10))
+        self.log_text.tag_configure("INFO", foreground="#7d8590", font=('Consolas', 10))
+        
+        # Timestamp - Muted
+        self.log_text.tag_configure("TIME", foreground="#6e7681", font=('Consolas', 9))
+        
+        # Special highlights - FIXED: ใช้สี RGB ธรรมดา
+        self.log_text.tag_configure("HIGHLIGHT", background="#404040", foreground="#ffd33d")
+        self.log_text.tag_configure("URGENT", background="#3d1a1a", foreground="#f85149")
+
+    # ========================= COMPLETE FIXED SETUP_LOGS =========================
+
     def setup_logs(self):
-        # Log display
-        self.log_text = tk.Text(self.logs_frame)
-        log_scrollbar = ttk.Scrollbar(self.logs_frame, orient='vertical', command=self.log_text.yview)
+        """Enhanced log setup with better formatting and filtering - FIXED VERSION"""
+        
+        # Main container frame
+        main_container = ttk.Frame(self.logs_frame)
+        main_container.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Top control panel
+        control_panel = ttk.LabelFrame(main_container, text="Log Controls")
+        control_panel.pack(fill='x', pady=(0, 10))
+        
+        # Filter controls
+        filter_frame = ttk.Frame(control_panel)
+        filter_frame.pack(fill='x', padx=10, pady=5)
+        
+        tk.Label(filter_frame, text="Filter:", font=('Arial', 9, 'bold')).pack(side='left', padx=(0, 5))
+        
+        self.log_filter = tk.StringVar(value="All")
+        filter_combo = ttk.Combobox(filter_frame, textvariable=self.log_filter, 
+                                values=["All", "AI Decisions", "Trading", "Profits", "Errors", "System"],
+                                width=15, state="readonly")
+        filter_combo.pack(side='left', padx=(0, 15))
+        filter_combo.bind('<<ComboboxSelected>>', self.filter_logs)
+        
+        # Auto-scroll control
+        self.auto_scroll = tk.BooleanVar(value=True)
+        scroll_check = tk.Checkbutton(filter_frame, text="Auto Scroll", 
+                                    variable=self.auto_scroll, font=('Arial', 9))
+        scroll_check.pack(side='left', padx=(0, 15))
+        
+        # Log level control
+        tk.Label(filter_frame, text="Level:", font=('Arial', 9, 'bold')).pack(side='left', padx=(0, 5))
+        self.log_level = tk.StringVar(value="All")
+        level_combo = ttk.Combobox(filter_frame, textvariable=self.log_level,
+                                values=["All", "INFO", "SUCCESS", "WARNING", "ERROR"],
+                                width=10, state="readonly")
+        level_combo.pack(side='left', padx=(0, 15))
+        level_combo.bind('<<ComboboxSelected>>', self.filter_logs)
+        
+        # Search box
+        tk.Label(filter_frame, text="Search:", font=('Arial', 9, 'bold')).pack(side='left', padx=(0, 5))
+        self.search_var = tk.StringVar()
+        search_entry = tk.Entry(filter_frame, textvariable=self.search_var, width=15)
+        search_entry.pack(side='left', padx=(0, 10))
+        search_entry.bind('<KeyRelease>', self.search_logs)
+        
+        # Quick clear search
+        clear_search_btn = tk.Button(filter_frame, text="✕", command=self.clear_search,
+                                    width=2, height=1, font=('Arial', 8))
+        clear_search_btn.pack(side='left', padx=(0, 10))
+        
+        # Log display frame
+        log_display_frame = ttk.LabelFrame(main_container, text="Trading Logs")
+        log_display_frame.pack(fill='both', expand=True)
+        
+        # Create enhanced text widget
+        text_frame = ttk.Frame(log_display_frame)
+        text_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        self.log_text = tk.Text(text_frame, wrap='word', height=25,
+                            bg='#0d1117', fg='#c9d1d9', 
+                            font=('Consolas', 10),
+                            insertbackground='#c9d1d9',
+                            selectbackground='#264f78',
+                            relief='flat',
+                            borderwidth=1)
+        
+        # Configure enhanced color tags for better readability
+        self.setup_log_tags()
+        
+        # Scrollbar with custom styling
+        log_scrollbar = ttk.Scrollbar(text_frame, orient='vertical', command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         
         self.log_text.pack(side='left', fill='both', expand=True)
         log_scrollbar.pack(side='right', fill='y')
         
-        # Clear logs button
-        clear_btn = tk.Button(self.logs_frame, text="Clear Logs", 
-                            command=self.clear_logs)
-        clear_btn.pack(side='bottom', pady=5)
+        # Bottom status and control panel
+        bottom_panel = ttk.Frame(main_container)
+        bottom_panel.pack(fill='x', pady=(10, 0))
         
+        # Status info (left side)
+        status_frame = ttk.Frame(bottom_panel)
+        status_frame.pack(side='left', fill='x', expand=True)
+        
+        self.log_status = tk.Label(status_frame, text="Logs: 0 entries | Filtered: 0 | Last: --:--:--", 
+                                font=('Arial', 9), fg='#7d8590', anchor='w')
+        self.log_status.pack(side='left')
+        
+        # Control buttons (right side)
+        button_frame = ttk.Frame(bottom_panel)
+        button_frame.pack(side='right')
+        
+        # Style buttons with colors
+        save_btn = tk.Button(button_frame, text="Save", command=self.save_logs,
+                            bg='#238636', fg='white', font=('Arial', 9, 'bold'),
+                            relief='flat', padx=10, pady=2)
+        save_btn.pack(side='left', padx=(0, 5))
+        
+        export_btn = tk.Button(button_frame, text="Export", command=self.export_logs,
+                            bg='#1f6feb', fg='white', font=('Arial', 9, 'bold'),
+                            relief='flat', padx=10, pady=2)
+        export_btn.pack(side='left', padx=(0, 5))
+        
+        clear_btn = tk.Button(button_frame, text="Clear", command=self.clear_logs,
+                            bg='#da3633', fg='white', font=('Arial', 9, 'bold'),
+                            relief='flat', padx=10, pady=2)
+        clear_btn.pack(side='left', padx=(0, 5))
+        
+        # Pause/Resume logging
+        self.logging_paused = tk.BooleanVar(value=False)
+        pause_btn = tk.Checkbutton(button_frame, text="Pause", variable=self.logging_paused,
+                                font=('Arial', 9, 'bold'), fg='#f85149')
+        pause_btn.pack(side='left', padx=(0, 5))
+        
+        # Initialize log storage
+        self.all_logs = []
+        self.filtered_logs = []
+        self.log_count = 0
+        self.displayed_count = 0
+
+    # ========================= HELPER METHODS =========================
+
+    def filter_logs(self, event=None):
+        """Apply current filter settings to logs"""
+        if not hasattr(self, 'all_logs'):
+            return
+            
+        # Get filter values
+        filter_type = self.log_filter.get()
+        level_filter = self.log_level.get()
+        search_term = self.search_var.get().lower()
+        
+        # Clear display
+        self.log_text.delete(1.0, tk.END)
+        
+        # Filter logs
+        self.filtered_logs = []
+        for log_entry in self.all_logs:
+            # Apply type filter
+            if filter_type != "All" and not self.matches_type_filter(log_entry, filter_type):
+                continue
+                
+            # Apply level filter  
+            if level_filter != "All" and log_entry.get('level', 'INFO') != level_filter:
+                continue
+                
+            # Apply search filter
+            if search_term and search_term not in log_entry['message'].lower():
+                continue
+                
+            self.filtered_logs.append(log_entry)
+        
+        # Display filtered logs
+        for log_entry in self.filtered_logs:
+            self.add_formatted_log_to_display(log_entry)
+        
+        # Update status
+        self.displayed_count = len(self.filtered_logs)
+        self.update_log_status()
+        
+        # Auto scroll to bottom
+        if self.auto_scroll.get():
+            self.log_text.see(tk.END)
+
+    def matches_type_filter(self, log_entry, filter_type):
+        """Check if log entry matches the type filter"""
+        message = log_entry['message'].upper()
+        
+        if filter_type == "AI Decisions":
+            return "AI DECISION" in message or "AI" in message
+        elif filter_type == "Trading":
+            return any(keyword in message for keyword in ["BUY", "SELL", "CLOSE", "ORDER", "POSITION"])
+        elif filter_type == "Profits":
+            return any(keyword in message for keyword in ["PROFIT", "PNL", "$"])
+        elif filter_type == "Errors":
+            return log_entry.get('level') == 'ERROR' or "ERROR" in message
+        elif filter_type == "System":
+            return not any(keyword in message for keyword in ["AI DECISION", "BUY", "SELL", "PROFIT", "ERROR"])
+        
+        return True
+
+    def search_logs(self, event=None):
+        """Perform real-time search filtering"""
+        self.filter_logs()
+
+    def clear_search(self):
+        """Clear search term and refresh"""
+        self.search_var.set("")
+        self.filter_logs()
+
+    def update_log_status(self):
+        """Update the status bar with current log statistics"""
+        if hasattr(self, 'filtered_logs'):
+            last_time = self.all_logs[-1]['timestamp'] if self.all_logs else "--:--:--"
+            status_text = f"Logs: {self.log_count} entries | Filtered: {self.displayed_count} | Last: {last_time}"
+            
+            # Add filter info if active
+            if (self.log_filter.get() != "All" or 
+                self.log_level.get() != "All" or 
+                self.search_var.get()):
+                status_text += " | FILTERED"
+                
+            self.log_status.config(text=status_text)
+
+    def add_formatted_log_to_display(self, log_entry):
+        """Add formatted log entry to display"""
+        timestamp = log_entry['timestamp']
+        message = log_entry['message']
+        level = log_entry.get('level', 'INFO')
+        
+        # Insert timestamp
+        self.log_text.insert(tk.END, f"[{timestamp}] ", "TIME")
+        
+        # Format and insert message with appropriate tag
+        if "AI Decision" in message:
+            self.log_text.insert(tk.END, "🤖 " + message, "AI")
+        elif any(keyword in message.upper() for keyword in ["BUY", "SELL", "CLOSE", "ORDER"]):
+            self.log_text.insert(tk.END, "📈 " + message, "TRADE")
+        elif any(keyword in message.upper() for keyword in ["PROFIT", "PNL", "$"]):
+            self.log_text.insert(tk.END, "💰 " + message, "PROFIT")
+        elif level == "ERROR" or "ERROR" in message.upper():
+            self.log_text.insert(tk.END, "🚨 " + message, "ERROR")
+        elif level == "WARNING" or "WARNING" in message.upper():
+            self.log_text.insert(tk.END, "⚠️ " + message, "WARNING")
+        elif level == "SUCCESS" or "SUCCESS" in message.upper():
+            self.log_text.insert(tk.END, "✅ " + message, "SUCCESS")
+        else:
+            self.log_text.insert(tk.END, "ℹ️ " + message, "SYSTEM")
+        
+        self.log_text.insert(tk.END, "\n")
+
+    # ========================= ENHANCED LOG_MESSAGE =========================
+
+    def log_message(self, message, level="INFO"):
+        """Enhanced log message with formatting and colors - FIXED VERSION"""
+        from datetime import datetime
+        
+        # Skip if logging is paused
+        if hasattr(self, 'logging_paused') and self.logging_paused.get():
+            return
+        
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        # Store in all_logs
+        log_entry = {
+            'timestamp': timestamp,
+            'level': level,
+            'message': message
+        }
+        
+        if not hasattr(self, 'all_logs'):
+            self.all_logs = []
+            self.log_count = 0
+            
+        self.all_logs.append(log_entry)
+        self.log_count += 1
+        
+        # Apply current filter and display if matches
+        if (not hasattr(self, 'log_filter') or 
+            self.should_display_log(log_entry)):
+            self.add_formatted_log_to_display(log_entry)
+            
+            # Auto scroll if enabled
+            if hasattr(self, 'auto_scroll') and self.auto_scroll.get():
+                self.log_text.see(tk.END)
+        
+        # Update status
+        if hasattr(self, 'update_log_status'):
+            self.update_log_status()
+
+    def should_display_log(self, log_entry):
+        """Check if log should be displayed based on current filters"""
+        if not hasattr(self, 'log_filter'):
+            return True
+            
+        filter_type = self.log_filter.get()
+        level_filter = self.log_level.get() if hasattr(self, 'log_level') else "All"
+        search_term = self.search_var.get().lower() if hasattr(self, 'search_var') else ""
+        
+        # Apply filters
+        if filter_type != "All" and not self.matches_type_filter(log_entry, filter_type):
+            return False
+            
+        if level_filter != "All" and log_entry.get('level', 'INFO') != level_filter:
+            return False
+            
+        if search_term and search_term not in log_entry['message'].lower():
+            return False
+            
+        return True
+
+    # ========================= EXPORT FUNCTIONS =========================
+
+    def save_logs(self):
+        """Save current filtered logs to file"""
+        try:
+            import os
+            from datetime import datetime
+            from tkinter import messagebox
+            
+            os.makedirs('logs', exist_ok=True)
+            filename = f"logs/trading_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            
+            logs_to_save = getattr(self, 'filtered_logs', []) or getattr(self, 'all_logs', [])
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(f"Trading System Logs - Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Total Entries: {len(logs_to_save)}\n")
+                f.write("=" * 80 + "\n\n")
+                
+                for log_entry in logs_to_save:
+                    f.write(f"[{log_entry['timestamp']}] [{log_entry.get('level', 'INFO')}] {log_entry['message']}\n")
+            
+            messagebox.showinfo("Success", f"Logs saved to:\n{filename}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save logs:\n{str(e)}")
+
+    def export_logs(self):
+        """Export logs in various formats"""
+        try:
+            from tkinter import filedialog, messagebox
+            import json
+            from datetime import datetime
+            
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[
+                    ("JSON files", "*.json"),
+                    ("Text files", "*.txt"), 
+                    ("CSV files", "*.csv")
+                ],
+                title="Export Trading Logs"
+            )
+            
+            if not filename:
+                return
+                
+            logs_to_export = getattr(self, 'filtered_logs', []) or getattr(self, 'all_logs', [])
+            
+            if filename.endswith('.json'):
+                with open(filename, 'w', encoding='utf-8') as f:
+                    export_data = {
+                        'export_time': datetime.now().isoformat(),
+                        'total_entries': len(logs_to_export),
+                        'logs': logs_to_export
+                    }
+                    json.dump(export_data, f, indent=2, ensure_ascii=False)
+                    
+            elif filename.endswith('.csv'):
+                import csv
+                with open(filename, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['Timestamp', 'Level', 'Message'])
+                    for log in logs_to_export:
+                        writer.writerow([log['timestamp'], log.get('level', 'INFO'), log['message']])
+                        
+            else:  # .txt
+                with open(filename, 'w', encoding='utf-8') as f:
+                    for log in logs_to_export:
+                        f.write(f"[{log['timestamp']}] [{log.get('level', 'INFO')}] {log['message']}\n")
+            
+            messagebox.showinfo("Success", f"Logs exported to:\n{filename}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export logs:\n{str(e)}")
+
+    def clear_logs(self):
+        """Enhanced clear logs with confirmation"""
+        from tkinter import messagebox
+        
+        log_count = getattr(self, 'log_count', 0)
+        if log_count > 0:
+            result = messagebox.askyesno("Clear Logs", 
+                                    f"Clear all {log_count} log entries?\nThis cannot be undone.")
+            if not result:
+                return
+        
+        self.log_text.delete(1.0, tk.END)
+        self.all_logs = []
+        self.filtered_logs = []
+        self.log_count = 0
+        self.displayed_count = 0
+        
+        if hasattr(self, 'update_log_status'):
+            self.update_log_status()
+
     def connect_mt5(self):
         try:
             if self.mt5_interface.connect():
@@ -471,8 +900,8 @@ class TradingGUI:
             
             print("DEBUG: Creating RL agent...")
             self.rl_agent = RLAgent(self.trading_env, self.config)
-            self.config['training_mode'] = True
-            self.is_training = True
+            self.config['training_mode'] = False
+            self.is_training = False
             self.start_training_btn.config(state='disabled')
             self.stop_training_btn.config(state='normal')
             self.pause_training_btn.config(state='normal')
@@ -558,12 +987,17 @@ class TradingGUI:
     def trading_loop(self):
         while self.is_trading:
             try:
+                self.trading_env.update_market_data()
                 # Get observation from environment (แทน market_data)
                 observation = self.trading_env._get_observation()
                 self.log_message(f"🔍 Observation updated: {observation[:5]}...")  # ← เพิ่ม
 
                 # Get RL agent decision
                 action = self.rl_agent.get_action(observation)
+                action = self.force_ai_diversity(action)
+
+                action[0] += np.random.normal(0, 0.05)  # Add noise to action
+                action[0] = np.clip(action[0], 0, 4)    # Keep in range
                 self.log_message(f"🤖 AI Decision: {action}")  # ← เพิ่ม
 
                 # Execute action
@@ -627,10 +1061,24 @@ class TradingGUI:
         return self.is_training
         
     def execute_action(self, action):
-        # Execute trading action based on RL agent decision
-        # This would interface with the recovery engine
-        pass
-        
+        """Execute trading action through environment"""
+        try:
+            # ส่ง action ไปที่ environment เพื่อประมวลผล
+            observation, reward, done, truncated, info = self.trading_env.step(action)
+            
+            # Log ผลลัพธ์
+            self.log_message(f"⚡ Action executed: reward={reward:.3f}, done={done}")
+            
+            # Update info
+            if info:
+                self.log_message(f"📊 Info: {info}")
+                
+            return reward
+            
+        except Exception as e:
+            self.log_message(f"❌ Execute action error: {str(e)}")
+            return 0.0        
+    
     def update_gui(self):
         # Update position table
         self.update_positions()
@@ -744,7 +1192,7 @@ class TradingGUI:
                 'algorithm': 'PPO',
                 'learning_rate': 0.0003,
                 'training_steps': 1000,
-                'training_mode': True,
+                'training_mode': False,
                 # Default profit settings - เก็บกำไรเร็วขึ้น
                 'min_profit_target': 25,
                 'trailing_stop_distance': 15,

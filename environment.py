@@ -7,6 +7,107 @@ from typing import Dict, List, Tuple, Any
 import MetaTrader5 as mt5
 from datetime import datetime, timedelta
 import time
+
+class TradingStatusManager:
+    """จัดการ Trading Status แบบชัดเจน"""
+    
+    def __init__(self, gui_callback=None):
+        self.gui_callback = gui_callback
+        self.current_phase = "WAITING"
+        self.entry_price = 0
+        self.entry_time = None
+        self.total_positions = 0
+        self.total_pnl = 0
+        self.target_profit = 25.0
+        self.target_recovery = -50.0
+        self.last_status_log = ""
+    
+    def update_status(self, positions, mt5_interface):
+        """อัพเดท status และส่งไป GUI"""
+        try:
+            current_time = datetime.now().strftime("%H:%M:%S")
+            
+            # คำนวณข้อมูลปัจจุบัน
+            self.total_positions = len(positions) if positions else 0
+            self.total_pnl = sum(pos.get('profit', 0) for pos in positions) if positions else 0
+            
+            # กำหนด Phase และ Status
+            status_message = self._determine_status()
+            
+            # ส่ง log ไป GUI (ถ้าเปลี่ยนจากครั้งก่อน)
+            if status_message != self.last_status_log:
+                self._send_to_gui(f"[{current_time}] {status_message}")
+                self.last_status_log = status_message
+                
+        except Exception as e:
+            self._send_to_gui(f"❌ Status update error: {e}")
+            
+    def _determine_status(self):
+        """กำหนด status ตาม phase ปัจจุบัน"""
+        
+        if self.total_positions == 0:
+            self.current_phase = "WAITING"
+            return "🔍 รอสัญญาณเข้าเทรด - วิเคราะห์ตลาด XAUUSD..."
+            
+        elif self.total_positions == 1 and self.total_pnl > -10:
+            self.current_phase = "FIRST_ENTRY"
+            return f"🎯 เข้าออเดอร์แรกแล้ว - {self.total_positions} position | PnL: ${self.total_pnl:.2f}"
+            
+        elif self.total_pnl < self.target_recovery:
+            self.current_phase = "RECOVERY"
+            return f"🛠️ กำลังแก้ไม้ - ขาดทุน ${abs(self.total_pnl):.2f} | {self.total_positions} positions | เป้าหมาย: กลับมาคุ้มทุน"
+            
+        elif self.total_pnl > self.target_profit:
+            self.current_phase = "READY_TO_CLOSE"
+            return f"💰 พร้อมเก็บกำไร - กำไร ${self.total_pnl:.2f} | เป้าหมาย: ${self.target_profit:.2f} | รออีกสักครู่..."
+            
+        elif self.total_pnl > 0:
+            self.current_phase = "MONITORING_PROFIT"
+            return f"📈 กำไรขาขึ้น - ${self.total_pnl:.2f} | เป้าหมาย: ${self.target_profit:.2f} | รอเก็บกำไร..."
+            
+        elif self.total_pnl < 0 and self.total_pnl > self.target_recovery:
+            self.current_phase = "MONITORING_LOSS"
+            return f"📉 ขาดทุนเล็กน้อย - ${self.total_pnl:.2f} | {self.total_positions} positions | รอฟื้นตัว..."
+            
+        else:
+            self.current_phase = "MONITORING"
+            return f"📊 ติดตามผล - {self.total_positions} positions | PnL: ${self.total_pnl:.2f}"
+    
+    def _send_to_gui(self, message):
+        """ส่ง message ไป GUI Log"""
+        try:
+            if self.gui_callback:
+                # ส่งไป GUI Log Tab
+                self.gui_callback(message, level="INFO")
+            
+            # พิมพ์ใน console ด้วย (สำหรับ debug)
+            print(f"🎯 TRADING STATUS: {message}")
+            
+        except Exception as e:
+            print(f"GUI callback error: {e}")
+    
+    def log_trade_action(self, action_type, lot_size, price):
+        """Log การเข้า/ออก trade"""
+        try:
+            current_time = datetime.now().strftime("%H:%M:%S")
+            
+            if action_type in ['buy', 'sell']:
+                message = f"⚡ เข้า {action_type.upper()} - {lot_size} lots ที่ราคา ${price:.2f}"
+                
+            elif action_type == 'close':
+                message = f"💰 ปิด Position - กำไร/ขาดทุน ${self.total_pnl:.2f}"
+                
+            elif action_type == 'hedge':
+                message = f"🛡️ Hedge Position - {lot_size} lots ป้องกันความเสี่ยง"
+                
+            else:
+                message = f"📝 {action_type} - {lot_size} lots"
+            
+            self._send_to_gui(f"[{current_time}] {message}")
+            
+        except Exception as e:
+            print(f"Trade action log error: {e}")
+
 class TradingEnvironment(gym.Env):
     """
     Custom Gymnasium environment for XAUUSD trading with recovery system
@@ -85,6 +186,15 @@ class TradingEnvironment(gym.Env):
         self.analysis_mode = 'ENTRY'  # ENTRY, MANAGEMENT, RECOVERY
         self.current_balance = 1000.0
         self.balance_update_time = 0
+        self.status_manager = TradingStatusManager(gui_callback=self.gui_log_callback)
+
+    def gui_log_callback(self, message, level="INFO"):
+        """Callback สำหรับส่ง log ไป GUI"""
+        try:
+            if hasattr(self, 'gui_instance') and self.gui_instance:
+                self.gui_instance.log_message(message, level)
+        except:
+            pass
     
     def get_current_balance(self):
             """Helper method to get current balance with caching"""
@@ -104,21 +214,11 @@ class TradingEnvironment(gym.Env):
                 print(f"Error getting balance: {e}")
                 return self.current_balance
 
-    def calculate_percentage_thresholds(self, profit_pct=2.5, loss_pct=5.0):
-        """Helper method to calculate percentage thresholds"""
+    def calculate_percentage_thresholds(self, profit_pct=None, loss_pct=None):
+        """Helper method to calculate percentage thresholds - DYNAMIC VERSION"""
         try:
-            current_balance = self.get_current_balance()
-            
-            profit_threshold = current_balance * (profit_pct / 100)
-            loss_threshold = current_balance * (loss_pct / 100)
-            
-            return {
-                'balance': current_balance,
-                'profit_threshold': profit_threshold,
-                'loss_threshold': loss_threshold,
-                'profit_pct': profit_pct,
-                'loss_pct': loss_pct
-            }
+            # ใช้ dynamic values แทน hard-coded
+            return self.get_balance_and_thresholds(profit_pct, loss_pct)
             
         except Exception as e:
             print(f"Error calculating thresholds: {e}")
@@ -129,6 +229,7 @@ class TradingEnvironment(gym.Env):
                 'profit_pct': 2.5,
                 'loss_pct': 5.0
             }
+                
 
     def reset(self, seed=None, options=None):
         """Reset the environment to initial state"""
@@ -210,6 +311,8 @@ class TradingEnvironment(gym.Env):
         
         # Get new observation
         observation = self._get_observation()
+        positions = self.mt5_interface.get_positions()
+        self.status_manager.update_status(positions, self.mt5_interface)
         
         # Check if episode is done
         done = self._is_episode_done()
@@ -437,8 +540,8 @@ class TradingEnvironment(gym.Env):
             
         return reward
 
-    def get_balance_and_thresholds(self, profit_pct=2.5, loss_pct=5.0):
-        """Helper method to safely get balance and calculate thresholds"""
+    def get_balance_and_thresholds(self, profit_pct=None, loss_pct=None):
+        """Helper method to safely get balance and calculate thresholds - DYNAMIC VERSION"""
         try:
             # Default values
             current_balance = 1000.0
@@ -452,16 +555,20 @@ class TradingEnvironment(gym.Env):
                 except Exception as e:
                     print(f"Error getting account info: {e}")
             
+            # 🔥 อ่านค่าจาก recovery_engine (GUI settings) แทน hard-coded
+            profit_threshold_pct = profit_pct or self.get_dynamic_profit_threshold()
+            loss_threshold_pct = loss_pct or self.get_dynamic_loss_threshold()
+            
             # Calculate thresholds
-            profit_threshold = current_balance * (profit_pct / 100)
-            loss_threshold = current_balance * (loss_pct / 100)
+            profit_threshold = current_balance * (profit_threshold_pct / 100)
+            loss_threshold = current_balance * (loss_threshold_pct / 100)
             
             return {
                 'balance': current_balance,
                 'profit_threshold': profit_threshold,
                 'loss_threshold': loss_threshold,
-                'profit_pct': profit_pct,
-                'loss_pct': loss_pct
+                'profit_pct': profit_threshold_pct,
+                'loss_pct': loss_threshold_pct
             }
             
         except Exception as e:
@@ -475,27 +582,67 @@ class TradingEnvironment(gym.Env):
                 'loss_pct': 5.0
             }
 
-    def get_appropriate_action(self, original_action):
-        """Get appropriate action with PERCENTAGE THRESHOLDS - FIXED VERSION"""
+    def get_dynamic_profit_threshold(self):
+        """อ่าน profit threshold จาก recovery_engine (GUI settings)"""
         try:
-            # ✅ ประกาศตัวแปรทั้งหมดตั้งแต่ต้น
-            current_balance = 1000  # Default
-            profit_threshold_pct = 2.5  # 2.5%
-            loss_threshold_pct = 5.0   # 5%
-            profit_threshold = 25.0    # Default $25
-            loss_threshold = 50.0      # Default $50
+            if hasattr(self, 'recovery_engine') and self.recovery_engine:
+                recovery_status = self.recovery_engine.get_status()
+                profit_settings = recovery_status.get('profit_settings', {})
+                
+                # อ่านค่าจาก GUI
+                min_profit_target = profit_settings.get('min_profit_target', 25)
+                
+                # ถ้าเป็น USD value (>10) แปลงเป็น %
+                if min_profit_target > 10:
+                    # ได้ balance
+                    account_info = self.mt5_interface.get_account_info() if hasattr(self, 'mt5_interface') else None
+                    current_balance = account_info.get('balance', 1000) if account_info else 1000
+                    
+                    # แปลง USD เป็น %
+                    profit_threshold_pct = (min_profit_target / current_balance) * 100
+                    print(f"🔄 Dynamic Profit: ${min_profit_target} = {profit_threshold_pct:.2f}% of ${current_balance}")
+                    return profit_threshold_pct
+                else:
+                    # เป็น % อยู่แล้ว
+                    print(f"🔄 Dynamic Profit: {min_profit_target}%")
+                    return min_profit_target
+                    
+        except Exception as e:
+            print(f"Error getting dynamic profit threshold: {e}")
             
-            # Get current balance and calculate thresholds
-            if hasattr(self, 'mt5_interface'):
-                try:
-                    account_info = self.mt5_interface.get_account_info()
-                    if account_info:
-                        current_balance = account_info.get('balance', 1000)
-                        profit_threshold = current_balance * (profit_threshold_pct / 100)
-                        loss_threshold = current_balance * (loss_threshold_pct / 100)
-                except Exception as e:
-                    print(f"Error getting balance in get_appropriate_action: {e}")
-                    # ใช้ค่า default ที่ประกาศไว้แล้ว
+        # Fallback to default
+        return 2.5
+
+    def get_dynamic_loss_threshold(self):
+        """อ่าน loss threshold จาก recovery_engine หรือ config"""
+        try:
+            if hasattr(self, 'recovery_engine') and self.recovery_engine:
+                recovery_status = self.recovery_engine.get_status()
+                profit_settings = recovery_status.get('profit_settings', {})
+                
+                # อ่านค่า loss threshold (ถ้ามี)
+                loss_threshold = profit_settings.get('max_loss_pct', 5.0)
+                print(f"🔄 Dynamic Loss: {loss_threshold}%")
+                return loss_threshold
+                
+        except Exception as e:
+            print(f"Error getting dynamic loss threshold: {e}")
+            
+        # Fallback to default
+        return 5.0
+
+    def get_appropriate_action(self, original_action):
+        """Get appropriate action with DYNAMIC PERCENTAGE THRESHOLDS"""
+        try:
+            # 🔥 ใช้ dynamic thresholds แทน hard-coded
+            thresholds = self.get_balance_and_thresholds()
+            current_balance = thresholds['balance']
+            profit_threshold_pct = thresholds['profit_pct']  # จาก GUI
+            loss_threshold_pct = thresholds['loss_pct']      # จาก GUI
+            profit_threshold = thresholds['profit_threshold']
+            loss_threshold = thresholds['loss_threshold']
+            
+            print(f"💰 DYNAMIC Thresholds: Profit=${profit_threshold:.2f} ({profit_threshold_pct}%), Loss=${loss_threshold:.2f} ({loss_threshold_pct}%)")
             
             if self.analysis_mode == 'ENTRY':
                 return original_action
@@ -504,36 +651,12 @@ class TradingEnvironment(gym.Env):
                 positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
                 total_pnl = sum(pos.get('profit', 0) for pos in positions)
                 
-                # 💰 Smart profit taking with percentage thresholds
-                if hasattr(self, 'recovery_engine'):
-                    try:
-                        recovery_status = self.recovery_engine.get_status()
-                        profit_settings = recovery_status.get('profit_settings', {})
-                        min_profit_target = profit_settings.get('min_profit_target', 25)  # Default USD
-                        
-                        # แปลง USD เป็น % ถ้าจำเป็น
-                        if min_profit_target > 10:  # ถ้า > 10 แสดงว่าเป็น USD
-                            min_profit_pct = (min_profit_target / current_balance) * 100
-                            profit_threshold = min_profit_target  # ใช้ USD ตรงๆ
-                        else:
-                            min_profit_pct = min_profit_target
-                            profit_threshold = current_balance * (min_profit_pct / 100)
-                        
-                        if total_pnl > profit_threshold:
-                            print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} (Target: ${profit_threshold:.2f})")
-                            return 3.2
-                    except Exception as e:
-                        print(f"Error in recovery engine profit check: {e}")
-                        # Fall back to default threshold
-                        if total_pnl > profit_threshold:
-                            print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} (Default: ${profit_threshold:.2f})")
-                            return 3.2
-                else:
-                    if total_pnl > profit_threshold:
-                        print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} ({profit_threshold_pct}% of ${current_balance:.2f})")
-                        return 3.2
-                        
-                # Check if need recovery - ✅ ตอนนี้ loss_threshold ถูกประกาศแล้ว
+                # 💰 Smart profit taking with DYNAMIC thresholds
+                if total_pnl > profit_threshold:
+                    print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} ({profit_threshold_pct}% of ${current_balance:.2f})")
+                    return 3.2
+                    
+                # Check if need recovery - ใช้ dynamic loss threshold
                 if total_pnl < -loss_threshold:
                     print(f"🔄 MANAGEMENT: Switching to recovery at ${total_pnl:.2f} ({loss_threshold_pct}% loss = ${loss_threshold:.2f})")
                     self.analysis_mode = 'RECOVERY'
@@ -544,7 +667,7 @@ class TradingEnvironment(gym.Env):
                 return 0.1
                     
             elif self.analysis_mode == 'RECOVERY':
-                # Recovery mode logic
+                # Recovery mode logic - ใช้ dynamic values
                 positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
                 total_pnl = sum(pos.get('profit', 0) for pos in positions)
                 
@@ -581,7 +704,7 @@ class TradingEnvironment(gym.Env):
         except Exception as e:
             print(f"Action adjustment error: {e}")
             return original_action
-        
+            
     def check_recovery_completion(self):
         """Check if recovery is completed and reset state"""
         try:

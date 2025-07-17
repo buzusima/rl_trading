@@ -1168,6 +1168,7 @@ class TradingGUI:
             
             print("DEBUG: Starting training thread...")
             self.trading_env = TradingEnvironment(self.mt5_interface, self.recovery_engine, self.config)
+            self.trading_env.gui_instance = self
             # Start training thread with callback
             self.training_thread = threading.Thread(target=self.training_loop_with_callback)
             self.training_thread.daemon = True

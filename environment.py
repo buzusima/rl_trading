@@ -22,6 +22,8 @@ class TradingEnvironment(gym.Env):
 
         self.mt5_interface = mt5_interface
         self.recovery_engine = recovery_engine
+        from portfolio_manager import AIPortfolioManager
+        self.portfolio_manager = AIPortfolioManager(config)
         self.config = config
         # Trading parameters
         self.symbol = config.get('symbol', 'XAUUSD')
@@ -74,7 +76,14 @@ class TradingEnvironment(gym.Env):
         self.total_trades = 0
         self.winning_trades = 0
         self.simulated_positions = []  # เก็บ position จำลอง
-    
+        
+        # 🎯 Position State Management
+        self.position_state = 'READY'  # READY, ACTIVE, RECOVERY, CLOSING
+        self.last_entry_time = 0
+        self.active_positions_count = 0
+        self.entry_cooldown = 10  # 10 seconds between entries
+        self.analysis_mode = 'ENTRY'  # ENTRY, MANAGEMENT, RECOVERY
+
     def reset(self, seed=None, options=None):
         """Reset the environment to initial state"""
         super().reset(seed=seed)
@@ -112,7 +121,10 @@ class TradingEnvironment(gym.Env):
                 'recovery_level': 0,
                 'market_status': 'open'
         }
-            
+        self.portfolio_manager.initialize_portfolio(self.mt5_interface)
+        # Get initial observation
+        observation = self._get_observation()
+
         return observation, info
         
     def step(self, action):
@@ -134,7 +146,11 @@ class TradingEnvironment(gym.Env):
             return observation, reward, done, False, info 
         
         self.current_step += 1
-        
+        # Update portfolio before action
+        self.portfolio_manager.update_portfolio_status(self.mt5_interface)
+    
+        # Parse action
+        action_type = float(action[0])
         # Parse action
         action_type = float(action[0])
         lot_multiplier = float(action[1])
@@ -158,13 +174,16 @@ class TradingEnvironment(gym.Env):
         return observation, reward, done, False, info
         
     def _execute_action(self, action_type, lot_multiplier, recovery_action):
-        """Execute the trading action with INTELLIGENT decision making"""
+        """Execute trading action with POSITION STATE MANAGEMENT and RECOVERY SYSTEM"""
         reward = 0.0
         
         print(f"🔍 DEBUG _execute_action called:")
         print(f"   Original action_type: {action_type}")
         
         try:
+            # 🎯 UPDATE POSITION STATE FIRST
+            self.update_position_state()
+            
             # Get current market data
             current_price = self._get_current_price()
             if current_price is None:
@@ -179,136 +198,170 @@ class TradingEnvironment(gym.Env):
             try:
                 intelligent_action = self.intelligent_action_logic(action_type, positions, total_pnl)
                 
-                # เช็คว่า intelligent_action ไม่เป็น None
                 if intelligent_action is not None and intelligent_action != action_type:
                     print(f"🧠 SMART OVERRIDE: {action_type:.3f} → {intelligent_action:.3f}")
                     action_type = intelligent_action
-                elif intelligent_action is None:
-                    print(f"⚠️ WARNING: intelligent_action_logic returned None, using original action: {action_type:.3f}")
             except Exception as e:
                 print(f"❌ ERROR in intelligent_action_logic: {e}")
-                print(f"🔄 Using original action: {action_type:.3f}")            
+                print(f"🔄 Using original action: {action_type:.3f}")
+                
+            # 🎯 APPLY POSITION STATE LOGIC
+            adjusted_action = self.get_appropriate_action(action_type)
+            if adjusted_action != action_type:
+                print(f"🎯 STATE OVERRIDE: {action_type:.3f} → {adjusted_action:.3f}")
+                action_type = adjusted_action
             
-            # Check if in training mode
-            is_training_mode = True
+            # 🚫 CHECK IF NEW ENTRY IS ALLOWED
+            if 0.3 <= action_type < 2.7:  # Would open new position
+                if not self.should_allow_new_entry(action_type):
+                    print("🚫 NEW ENTRY BLOCKED - Converting to HOLD")
+                    action_type = 0.1  # Force hold
+            
+            # Check training mode
+            is_training_mode = self.config.get('training_mode', True)
             print(f"🔍 DEBUG training_mode: {is_training_mode}")
             
-            # Calculate position size (now using lot_multiplier properly)
-            base_lot_size = self.initial_lot_size
-            if self.recovery_active:
-                base_lot_size = self.recovery_engine.calculate_lot_size(
-                    base_lot_size, self.recovery_level
-                )
-            
-            # 🔧 ACTUALLY USE lot_multiplier
-            lot_size = base_lot_size * lot_multiplier
-            lot_size = max(0.01, min(lot_size, 10.0))
-            lot_size = round(lot_size / 0.01) * 0.01
-            lot_size = max(0.01, lot_size)
-            
-            print(f"🔍 DEBUG: base_lot: {base_lot_size}, multiplier: {lot_multiplier}, final: {lot_size}")
+            # 💼 Position sizing (existing code)
+            if 0.3 <= action_type < 2.7:
+                if hasattr(self, 'portfolio_manager'):
+                    stop_loss = current_price * 0.999 if action_type < 1.7 else current_price * 1.001
+                    optimal_size = self.portfolio_manager.calculate_position_size(
+                        self.symbol, current_price, stop_loss, self.mt5_interface
+                    )
+                    lot_size = min(optimal_size * lot_multiplier, 0.01)  # Max 0.01 lot for safety
+                    lot_size = max(0.01, lot_size)
+                else:
+                    lot_size = 0.01  # Safe default
+            else:
+                lot_size = 0.01
 
-            # 🔥 IMPROVED DECISION LOGIC
-            print(f"🔍 DEBUG: Checking action conditions with intelligent_action: {action_type}")
-            
+            # 🔥 EXECUTE ACTIONS WITH STATE AWARENESS
             if action_type < 0.3:
                 print(f"🟡 HOLD: action_type {action_type:.3f} < 0.3")
                 if is_training_mode:
                     reward += self._calculate_simulated_hold_reward()
+                    print(f"🔥 SIMULATED HOLD")
                 else:
-                    reward += self._calculate_hold_reward()
+                    reward += 0.1
+                    print(f"🚀 LIVE HOLD")
                     
             elif 0.3 <= action_type < 1.7:
                 print(f"🟢 BUY: {action_type:.3f} in [0.3, 1.7)")
                 if is_training_mode:
-                    success = True
                     reward += self._calculate_simulated_trade_reward('buy', lot_size, current_price)
                     print(f"🔥 SIMULATED BUY: {lot_size} {self.symbol} at {current_price:.2f}")
                 else:
                     success = self.mt5_interface.place_order(
                         symbol=self.symbol, order_type='buy', volume=lot_size, price=current_price
                     )
-                    reward += self._calculate_trade_reward(success, 'buy', lot_size)
-                    print(f"🚀 LIVE BUY: {'SUCCESS' if success else 'FAILED'}")
+                    if success:
+                        self.last_entry_time = time.time()
+                        self.position_state = 'ACTIVE'
+                        self.analysis_mode = 'MANAGEMENT'
+                        
+                    reward += 2.0 if success else -2.0
+                    print(f"🚀 LIVE BUY: {'SUCCESS' if success else 'FAILED'} - {lot_size} lots")
                     
             elif 1.7 <= action_type < 2.7:
                 print(f"🔴 SELL: {action_type:.3f} in [1.7, 2.7)")
                 if is_training_mode:
-                    success = True
                     reward += self._calculate_simulated_trade_reward('sell', lot_size, current_price)
                     print(f"🔥 SIMULATED SELL: {lot_size} {self.symbol} at {current_price:.2f}")
                 else:
                     success = self.mt5_interface.place_order(
                         symbol=self.symbol, order_type='sell', volume=lot_size, price=current_price
                     )
-                    reward += self._calculate_trade_reward(success, 'sell', lot_size)
-                    print(f"🚀 LIVE SELL: {'SUCCESS' if success else 'FAILED'}")
+                    if success:
+                        self.last_entry_time = time.time()
+                        self.position_state = 'ACTIVE'
+                        self.analysis_mode = 'MANAGEMENT'
+                        
+                    reward += 2.0 if success else -2.0
+                    print(f"🚀 LIVE SELL: {'SUCCESS' if success else 'FAILED'} - {lot_size} lots")
                     
             elif 2.7 <= action_type < 3.5:
                 print(f"💰 CLOSE: {action_type:.3f} in [2.7, 3.5)")
-                
-                # 🔧 SPREAD ANALYSIS BEFORE CLOSE
-                if not is_training_mode:
-                    spread_info = self._get_current_spread_info()
-                    spread_cost = self._calculate_total_spread_cost(positions)
-                    net_pnl = total_pnl - spread_cost
-                    
-                    print(f"📊 CLOSE ANALYSIS:")
-                    print(f"   Current PnL: ${total_pnl:.2f}")
-                    print(f"   Spread Cost: ${spread_cost:.2f}")
-                    print(f"   Net PnL: ${net_pnl:.2f}")
-                    
-                    if spread_info:
-                        print(f"   Current Spread: {spread_info['spread_pips']:.1f} pips (${spread_info['spread_usd_per_lot']:.1f}/lot)")
-                        
                 if is_training_mode:
-                    success = True
                     reward += self._calculate_simulated_close_reward()
                     print(f"🔥 SIMULATED CLOSE ALL")
                 else:
-                    # Enhanced close logic (existing code จากที่แก้ไขไปแล้ว)
-                    print("🔍 DEBUG: Attempting to close positions...")
-                    
-                    # Get current positions first
                     positions = self.mt5_interface.get_positions()
-                    print(f"🔍 DEBUG: Found {len(positions) if positions else 0} positions to close")
-                    
-                    if not positions:
-                        print("⚠️ WARNING: No positions to close")
-                        success = True  # Consider it success if no positions
-                        reward += 0.5   # Small reward for attempting close
-                    else:
-                        # Try multiple close methods
+                    if positions:
                         success = self._enhanced_close_all_positions(positions)
+                        if success:
+                            self.position_state = 'READY'
+                            self.analysis_mode = 'ENTRY'
+                            print("🔄 STATE RESET: Ready for new entries")
                         
-                    reward += self._calculate_close_reward(success)
-                    if total_pnl > 0:
-                        reward += 2.0 + (total_pnl / 100.0)
-                        
-                    if success:
-                        print(f"🚀 LIVE CLOSE: SUCCESS ({len(positions) if positions else 0} positions)")
+                        reward += 3.0 if success and total_pnl > 0 else 1.0
+                        print(f"🚀 LIVE CLOSE: {'SUCCESS' if success else 'FAILED'}")
                     else:
-                        print(f"❌ LIVE CLOSE: FAILED ({len(positions) if positions else 0} positions)")
+                        reward += 0.5
+                        print("⚠️ No positions to close")
+                    
             elif action_type >= 3.5:
                 print(f"🛡️ HEDGE: {action_type:.3f} ≥ 3.5")
                 if is_training_mode:
-                    success = True
-                    reward += self._calculate_simulated_hedge_reward(lot_size)
+                    reward += 1.0
                     print(f"🔥 SIMULATED HEDGE: {lot_size}")
                 else:
                     success = self._execute_hedge_action(lot_size)
-                    reward += self._calculate_hedge_reward(success)
+                    reward += 1.5 if success else -1.0
                     print(f"🚀 LIVE HEDGE: {'SUCCESS' if success else 'FAILED'}")
             
-            # 🔧 ACTUALLY USE recovery_action
-            if not is_training_mode and recovery_action > 0 and self._should_activate_recovery():
-                print(f"🔄 RECOVERY ACTION: {recovery_action}")
-                self._execute_recovery_action(recovery_action)
-                reward += 0.5  # Small bonus for recovery activation
-                
-            # Update recovery status
-            self._update_recovery_status()
+            # 🔄 ENHANCED RECOVERY SYSTEM
+            if not is_training_mode and hasattr(self, 'recovery_engine'):
+                # Check if recovery is needed
+                if total_pnl < -30 or self.analysis_mode == 'RECOVERY':
+                    # Get current account info
+                    account_info = self.mt5_interface.get_account_info()
+                    current_equity = account_info.get('equity', 0) if account_info else 0
+                    
+                    print(f"🔄 RECOVERY CHECK: PnL=${total_pnl:.2f}, Mode={self.analysis_mode}")
+                    
+                    # Check recovery opportunities  
+                    profit_opportunities = self.recovery_engine.check_profit_opportunities(
+                        self.mt5_interface, self.symbol
+                    )
+                    
+                    if profit_opportunities:
+                        print(f"💰 PROFIT OPPORTUNITIES FOUND: {len(profit_opportunities)}")
+                        executed = self.recovery_engine.execute_profit_taking(
+                            self.mt5_interface, profit_opportunities
+                        )
+                        if executed:
+                            reward += 1.0
+                            print("✅ PROFIT TAKEN via recovery engine")
+                    
+                    # Smart profit strategy
+                    profit_taken = self.recovery_engine.smart_profit_strategy(
+                        self.mt5_interface, self.symbol
+                    )
+                    if profit_taken:
+                        reward += 2.0
+                        print("✅ SMART PROFIT STRATEGY executed")
+                        # Reset to ready state after successful profit taking
+                        self.position_state = 'READY'
+                        self.analysis_mode = 'ENTRY'
+                    
+                    # If still in loss, activate recovery
+                    elif total_pnl < -50:
+                        print(f"🚨 ACTIVATING RECOVERY: Loss=${total_pnl:.2f}")
+                        recovery_activated = self.recovery_engine.activate_recovery(
+                            symbol=self.symbol,
+                            mt5_interface=self.mt5_interface,
+                            current_pnl=total_pnl,
+                            current_equity=current_equity,
+                            recovery_type='combined'
+                        )
+                        
+                        if recovery_activated:
+                            reward += 0.5
+                            print("🔄 RECOVERY SYSTEM activated")
+                        else:
+                            print("❌ RECOVERY activation failed")
             
+            print(f"🎯 FINAL STATE: {self.position_state} | MODE: {self.analysis_mode}")
             print(f"🔍 DEBUG: Final reward: {reward:.3f}")
             
         except Exception as e:
@@ -318,7 +371,127 @@ class TradingEnvironment(gym.Env):
             reward = -5.0
             
         return reward
+    
+    def get_appropriate_action(self, original_action):
+        """Get appropriate action based on current position state with RECOVERY ENGINE"""
+        try:
+            if self.analysis_mode == 'ENTRY':
+                # In entry mode - allow original AI decision
+                return original_action
+                
+            elif self.analysis_mode == 'MANAGEMENT':
+                # In management mode - focus on profit taking and position management
+                positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
+                total_pnl = sum(pos.get('profit', 0) for pos in positions)
+                
+                # 💰 Smart profit taking with recovery engine settings
+                if hasattr(self, 'recovery_engine'):
+                    recovery_status = self.recovery_engine.get_status()
+                    profit_settings = recovery_status.get('profit_settings', {})
+                    min_profit_target = profit_settings.get('min_profit_target', 25)
+                    
+                    if total_pnl > min_profit_target:
+                        print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} (target: ${min_profit_target:.2f})")
+                        return 3.2  # Force close for profit
+                else:
+                    if total_pnl > 30:  # Default profit target
+                        print("💰 MANAGEMENT: Recommending profit taking")
+                        return 3.2
+                    
+                # Check if need recovery
+                if total_pnl < -50:  # Significant loss
+                    print("🔄 MANAGEMENT: Switching to recovery mode")
+                    self.analysis_mode = 'RECOVERY'
+                    self.position_state = 'RECOVERY'
+                    return self.get_appropriate_action(original_action)  # Re-evaluate in recovery mode
+                    
+                # Hold and monitor
+                print("📊 MANAGEMENT: Hold and monitor")
+                return 0.1  # Force hold
+                    
+            elif self.analysis_mode == 'RECOVERY':
+                # 🚨 ACTIVATE RECOVERY ENGINE
+                positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
+                total_pnl = sum(pos.get('profit', 0) for pos in positions)
+                
+                if hasattr(self, 'recovery_engine'):
+                    # Get current account info
+                    account_info = self.mt5_interface.get_account_info() if hasattr(self, 'mt5_interface') else None
+                    current_equity = account_info.get('equity', 0) if account_info else 0
+                    
+                    print(f"🚨 RECOVERY ENGINE: Activating for loss ${total_pnl:.2f}")
+                    
+                    # Activate recovery system
+                    success = self.recovery_engine.activate_recovery(
+                        symbol=self.symbol,
+                        mt5_interface=self.mt5_interface,
+                        current_pnl=total_pnl,
+                        current_equity=current_equity,
+                        recovery_type='combined'  # Use smart combined recovery
+                    )
+                    
+                    if success:
+                        print("✅ RECOVERY: Recovery system activated")
+                        # Let recovery system handle, return hold for now
+                        return 0.1
+                    else:
+                        print("❌ RECOVERY: Failed to activate, trying hedge")
+                        return 4.0  # Try hedge as fallback
+                else:
+                    print("🚨 RECOVERY: No recovery engine, using hedge")
+                    return 4.0  # Force hedge if no recovery engine
+                    
+            return original_action
+            
+        except Exception as e:
+            print(f"Action adjustment error: {e}")
+            return original_action
+    
+    def check_recovery_completion(self):
+        """Check if recovery is completed and reset state"""
+        try:
+            if hasattr(self, 'recovery_engine'):
+                completion = self.recovery_engine.check_recovery_completion(self.mt5_interface)
+                
+                if completion:
+                    print("🎉 RECOVERY COMPLETED - Resetting to entry mode")
+                    self.position_state = 'READY'
+                    self.analysis_mode = 'ENTRY'
+                    return True
+                    
+            return False
+            
+        except Exception as e:
+            print(f"Recovery completion check error: {e}")
+            return False
 
+    def get_recovery_status(self):
+        """Get current recovery status"""
+        try:
+            if hasattr(self, 'recovery_engine'):
+                return self.recovery_engine.get_status()
+            return {'recovery_active': False}
+            
+        except Exception as e:
+            print(f"Recovery status error: {e}")
+            return {'recovery_active': False}
+
+
+
+    # เพิ่ม helper method ใหม่
+    def _get_action_name(self, action_type):
+        """Convert action type to string name"""
+        if action_type < 0.3:
+            return 'hold'
+        elif 0.3 <= action_type < 1.7:
+            return 'buy'
+        elif 1.7 <= action_type < 2.7:
+            return 'sell'
+        elif 2.7 <= action_type < 3.5:
+            return 'close'
+        else:
+            return 'hedge'
+    
     # เพิ่ม Methods ใหม่สำหรับ Simulation
     def _calculate_simulated_trade_reward(self, trade_type, lot_size, entry_price):
         """Calculate REALISTIC reward based on actual price movement"""
@@ -706,152 +879,215 @@ class TradingEnvironment(gym.Env):
             
         return features
 
-    # 🤖 INTELLIGENT ACTION INTERPRETATION (ใน _execute_action)
     def intelligent_action_logic(self, action_type, positions, total_pnl):
-        """Enhanced AI with SPREAD AWARENESS"""
+        """PROFESSIONAL Multi-Timeframe Analysis"""
         
         try:
-            original_action = action_type
-            
-            # Safety check for inputs
+            # Safety checks
             if action_type is None:
-                print("⚠️ WARNING: action_type is None")
-                return 0.1  # Default HOLD
-                
-            if positions is None:
-                positions = []
-                
-            if total_pnl is None:
-                total_pnl = 0.0
+                return 0.1
+            positions = positions or []
+            total_pnl = total_pnl or 0.0
             
-            # 🔧 SPREAD COST CALCULATION
+            # 🔧 Spread analysis
             spread_cost = self._calculate_total_spread_cost(positions)
             adjusted_pnl = total_pnl - spread_cost
             
-            print(f"💰 PnL Analysis: Raw={total_pnl:.2f}, Spread Cost={spread_cost:.2f}, Net={adjusted_pnl:.2f}")
+            print(f"💰 PnL: Raw=${total_pnl:.2f}, Spread=${spread_cost:.2f}, Net=${adjusted_pnl:.2f}")
             
-            # 1. 💰 PROFIT TAKING LOGIC
-            min_profit_target = spread_cost + 20  # Spread cost + $20 buffer
-
-            if adjusted_pnl > min_profit_target:
-                print(f"💰 PROFITABLE CLOSE: Net ${adjusted_pnl:.2f} > target ${min_profit_target:.2f}")
+            # 1. Profit/Loss management
+            if adjusted_pnl > spread_cost + 20:
+                print(f"💰 TAKE PROFIT: ${adjusted_pnl:.2f}")
                 return 3.2
-                
-            # 2. 🚨 LOSS PROTECTION WITH SPREAD AWARENESS
-            max_acceptable_loss = -(spread_cost + 30)  # Allow spread cost + $30 loss
-
-            if adjusted_pnl < max_acceptable_loss:
-                print(f"🚨 STOP LOSS: Net ${adjusted_pnl:.2f} < limit ${max_acceptable_loss:.2f}")
+            if adjusted_pnl < -(spread_cost + 30):
+                print(f"🚨 STOP LOSS: ${adjusted_pnl:.2f}")
                 return 3.5
                 
-            # 3. 🔧 REALISTIC TRADE ANALYSIS FOR YOUR BROKER
+            # 2. 🎯 PROFESSIONAL MULTI-TIMEFRAME ANALYSIS
             if 0.3 <= action_type < 2.7:  # Would open new position
                 
-                # Calculate actual lot size we would trade
-                trading_lot_size = 0.01  # Default lot size
-                spread_cost_for_trade = 45 * trading_lot_size  # $0.45 for 0.01 lot
+                # Get professional analysis
+                main_trend = self.analyze_main_trend()
+                momentum = self.analyze_entry_momentum()
+                volatility = self.calculate_multi_tf_volatility()
+                sr_levels = self.detect_support_resistance()
                 
-                # Require 1.5x spread cost (balanced approach)
-                required_profit = spread_cost_for_trade * 1.5  # $0.675 for 0.01 lot
-
-                # ✅ FIXED: Initialize recent_prices properly
-                recent_prices = []
+                # Calculate required profit (same as before)
+                required_profit = 45 * 0.01 * 1.5  # $0.675
                 
-                # Analyze market movement potential
-                if hasattr(self, 'market_data_cache') and len(self.market_data_cache) >= 10:
-                    try:
-                        recent_prices = [data['close'] for data in self.market_data_cache[-10:]]
-                        
-                        if len(recent_prices) >= 5:
-                            # Look at different timeframes
-                            short_range = max(recent_prices[-3:]) - min(recent_prices[-3:])  # 3 bars
-                            medium_range = max(recent_prices[-5:]) - min(recent_prices[-5:])  # 5 bars
-                            long_range = max(recent_prices[-10:]) - min(recent_prices[-10:])  # 10 bars
-                            
-                            # Use the most promising range
-                            effective_range = max(short_range, medium_range * 0.6, long_range * 0.3)
-                            
-                            # Calculate realistic potential profit for 0.01 lot
-                            potential_profit = effective_range * 3.0
-
-                            print(f"📊 TRADE ANALYSIS:")
-                            print(f"   Lot size: {trading_lot_size}")
-                            print(f"   Spread cost: ${spread_cost_for_trade:.2f}")
-                            print(f"   Required: ${required_profit:.2f} (1.5x spread)")
-                            print(f"   Ranges: {short_range:.3f}|{medium_range:.3f}|{long_range:.3f}")
-                            print(f"   Potential: ${potential_profit:.2f}")
-                            
-                            if potential_profit < required_profit:
-                                print(f"⚠️ LOW POTENTIAL: ${potential_profit:.2f} < ${required_profit:.2f}")
-                                return 0.1  # Hold
-                            else:
-                                print(f"✅ GOOD POTENTIAL: ${potential_profit:.2f} ≥ ${required_profit:.2f}")
-                                # Allow trading
-                                
-                    except Exception as e:
-                        print(f"Market data analysis error: {e}")
-                        recent_prices = []  # Reset to empty if error
-                        
-                # ✅ FIXED: Check volatility trend as backup with proper error handling
-                try:
-                    if len(recent_prices) >= 5:
-                        price_changes = [abs(recent_prices[i] - recent_prices[i-1]) for i in range(1, len(recent_prices))]
-                        
-                        if price_changes:  # ✅ Check if we have valid price changes
-                            avg_movement = sum(price_changes) / len(price_changes)
-                            volatility_profit = avg_movement * trading_lot_size * 100
-                            
-                            print(f"📈 VOLATILITY: Avg move {avg_movement:.3f} = ${volatility_profit:.2f}")
-                            
-                            # If volatility is good, allow trading
-                            if volatility_profit >= required_profit * 0.5:  # 50% of required
-                                print(f"✅ GOOD VOLATILITY: ${volatility_profit:.2f} ≥ 50% required")
-                            else:
-                                print(f"⚠️ LOW VOLATILITY: ${volatility_profit:.2f} < 50% required")
-                                return 0.1  # Hold
-                        else:
-                            print("⚠️ No valid price changes for volatility analysis")
-                            
-                except Exception as e:
-                    print(f"Volatility check error: {e}")
-                    # Continue without volatility check
-
-            # 4. 🎯 SPREAD-EFFICIENT HOURS FOR YOUR BROKER
-            try:
-                spread_info = self._get_current_spread_info()
-                current_spread = spread_info.get('spread_pips', 4.5)
-
-                # Your broker: 4.5 pips minimum, avoid if > 6 pips
-                if current_spread > 6.0:
-                    if 0.3 <= action_type < 2.7:
-                        print(f"📈 HIGH SPREAD: {current_spread:.1f} pips > 6.0, avoiding trades")
-                        return 0.05
-            except Exception as e:
-                print(f"Spread check error: {e}")
-                                
-            # 5. 🔄 POSITION OPTIMIZATION
-            try:
-                if len(positions) > 3:  # With your spread cost, fewer positions better
-                    total_position_cost = len(positions) * 45 * 0.01  # $0.45 per 0.01 lot
-                    if abs(total_pnl) < total_position_cost:
-                        print(f"🔄 POSITION CLEANUP: PnL ${total_pnl:.2f} < position cost ${total_position_cost:.2f}")
-                        return 3.1  # Close to clean up
-            except Exception as e:
-                print(f"Position optimization error: {e}")
-                                    
-            # Apply original logic for other cases
-            try:
-                return self._original_intelligent_logic(action_type, positions, adjusted_pnl)
-            except Exception as e:
-                print(f"Original logic error: {e}")
-                return action_type  # Return original if error
+                # Professional potential calculation
+                potential_profit = volatility * 0.5  # More conservative but accurate
                 
+                print(f"📊 PROFESSIONAL ANALYSIS:")
+                print(f"   Main Trend: {main_trend}")
+                print(f"   Momentum Score: {momentum:.2f}")
+                print(f"   Multi-TF Volatility: {volatility:.3f}")
+                print(f"   Potential Profit: ${potential_profit:.2f}")
+                print(f"   Required: ${required_profit:.2f}")
+                
+                # 🧠 SMART DECISION MATRIX
+                trade_score = 0
+                
+                # Trend alignment bonus
+                if action_type < 1.7:  # BUY action
+                    if main_trend in ['UP', 'STRONG_UP']:
+                        trade_score += 3
+                        print("✅ BUY aligned with uptrend")
+                    elif main_trend in ['DOWN', 'STRONG_DOWN']:
+                        trade_score -= 2
+                        print("⚠️ BUY against downtrend")
+                else:  # SELL action
+                    if main_trend in ['DOWN', 'STRONG_DOWN']:
+                        trade_score += 3
+                        print("✅ SELL aligned with downtrend")
+                    elif main_trend in ['UP', 'STRONG_UP']:
+                        trade_score -= 2
+                        print("⚠️ SELL against uptrend")
+                        
+                # Momentum bonus
+                if momentum > 0.1:
+                    trade_score += 2
+                    print(f"✅ Good momentum: {momentum:.2f}")
+                elif momentum < -0.1:
+                    trade_score += 1  # Contrarian opportunity
+                    print(f"⚡ Contrarian opportunity: {momentum:.2f}")
+                    
+                # Volatility check
+                if potential_profit >= required_profit:
+                    trade_score += 2
+                    print(f"✅ Sufficient volatility: ${potential_profit:.2f}")
+                else:
+                    trade_score -= 3
+                    print(f"❌ Insufficient volatility: ${potential_profit:.2f}")
+                    
+                # Final decision
+                print(f"🎯 Trade Score: {trade_score}/7")
+                
+                if trade_score >= 3:
+                    print("✅ HIGH-PROBABILITY TRADE - EXECUTE")
+                    return action_type  # Allow trade
+                else:
+                    print("⚠️ LOW-PROBABILITY TRADE - HOLD")
+                    return 0.1  # Hold
+                    
+            # Continue with other checks (spread, position optimization, etc.)
+            return self._original_intelligent_logic(action_type, positions, adjusted_pnl)
+            
         except Exception as e:
-            print(f"❌ intelligent_action_logic error: {e}")
-            import traceback
-            traceback.print_exc()
-            return action_type  # Return original action if any error
-                        
+            print(f"❌ Professional analysis error: {e}")
+            return action_type
+
+    def update_position_state(self):
+        """Update position state based on current market positions"""
+        try:
+            positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
+            self.active_positions_count = len(positions)
+            
+            # Determine current state
+            if self.active_positions_count == 0:
+                self.position_state = 'READY'
+                self.analysis_mode = 'ENTRY'
+                print("🟢 STATE: READY - No positions, ready for new entry")
+                
+            elif self.active_positions_count > 0:
+                # Check if positions are profitable or need management
+                total_pnl = sum(pos.get('profit', 0) for pos in positions)
+                
+                if total_pnl > 20:  # In profit
+                    self.position_state = 'ACTIVE'
+                    self.analysis_mode = 'MANAGEMENT'
+                    print(f"💰 STATE: ACTIVE - {self.active_positions_count} positions, PnL: ${total_pnl:.2f}")
+                    
+                elif total_pnl < -50:  # In significant loss
+                    self.position_state = 'RECOVERY'
+                    self.analysis_mode = 'RECOVERY'
+                    print(f"🚨 STATE: RECOVERY - {self.active_positions_count} positions, Loss: ${total_pnl:.2f}")
+                    
+                else:  # Normal management
+                    self.position_state = 'ACTIVE'
+                    self.analysis_mode = 'MANAGEMENT'
+                    print(f"📊 STATE: ACTIVE - {self.active_positions_count} positions, PnL: ${total_pnl:.2f}")
+                    
+        except Exception as e:
+            print(f"Position state update error: {e}")
+
+    def should_allow_new_entry(self, action_type):
+        """Determine if new entry should be allowed"""
+        try:
+            # Only allow entry actions when in READY state
+            if action_type in [0.3, 1.7]:  # BUY or SELL range
+                if self.position_state != 'READY':
+                    print(f"🚫 NEW ENTRY BLOCKED - Current state: {self.position_state}")
+                    print(f"   Active positions: {self.active_positions_count}")
+                    print(f"   Analysis mode: {self.analysis_mode}")
+                    return False
+                    
+                # Check cooldown
+                current_time = time.time()
+                if current_time - self.last_entry_time < self.entry_cooldown:
+                    remaining = self.entry_cooldown - (current_time - self.last_entry_time)
+                    print(f"⏰ ENTRY COOLDOWN: {remaining:.1f} seconds remaining")
+                    return False
+                    
+                print("✅ NEW ENTRY ALLOWED - State is READY")
+                return True
+                
+            return True  # Allow other actions (HOLD, CLOSE, HEDGE)
+            
+        except Exception as e:
+            print(f"Entry permission error: {e}")
+            return False
+
+    def update_position_state(self):
+        """Update position state based on current market positions with RECOVERY CHECK"""
+        try:
+            positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
+            self.active_positions_count = len(positions)
+            
+            # 🔄 Check recovery completion first
+            if self.analysis_mode == 'RECOVERY':
+                if self.check_recovery_completion():
+                    return  # State already reset by check_recovery_completion
+            
+            # Determine current state
+            if self.active_positions_count == 0:
+                self.position_state = 'READY'
+                self.analysis_mode = 'ENTRY'
+                print("🟢 STATE: READY - No positions, ready for new entry")
+                
+            elif self.active_positions_count > 0:
+                # Check if positions are profitable or need management
+                total_pnl = sum(pos.get('profit', 0) for pos in positions)
+                
+                # Get recovery status
+                recovery_status = self.get_recovery_status()
+                recovery_active = recovery_status.get('recovery_active', False)
+                
+                if recovery_active:
+                    self.position_state = 'RECOVERY'
+                    self.analysis_mode = 'RECOVERY'
+                    recovery_level = recovery_status.get('recovery_level', 0)
+                    print(f"🔄 STATE: RECOVERY - Level {recovery_level}, PnL: ${total_pnl:.2f}")
+                    
+                elif total_pnl > 20:  # In profit
+                    self.position_state = 'ACTIVE'
+                    self.analysis_mode = 'MANAGEMENT'
+                    print(f"💰 STATE: ACTIVE - {self.active_positions_count} positions, PnL: ${total_pnl:.2f}")
+                    
+                elif total_pnl < -50:  # In significant loss, but recovery not active yet
+                    self.position_state = 'RECOVERY'
+                    self.analysis_mode = 'RECOVERY'
+                    print(f"🚨 STATE: RECOVERY - {self.active_positions_count} positions, Loss: ${total_pnl:.2f}")
+                    
+                else:  # Normal management
+                    self.position_state = 'ACTIVE'
+                    self.analysis_mode = 'MANAGEMENT'
+                    print(f"📊 STATE: ACTIVE - {self.active_positions_count} positions, PnL: ${total_pnl:.2f}")
+                    
+        except Exception as e:
+            print(f"Position state update error: {e}")
+                
+
     def _calculate_total_spread_cost(self, positions):
         """Calculate total spread cost - FIXED FOR YOUR BROKER"""
         try:
@@ -1632,39 +1868,183 @@ class TradingEnvironment(gym.Env):
         return features
         
     def update_market_data(self):
-        """Update market data with REAL data"""
+        """Update multi-timeframe market data with PROFESSIONAL analysis"""
         try:
             import MetaTrader5 as mt5
             
-            # Force fresh data
-            rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, 1)
+            # 📊 MULTI-TIMEFRAME DATA COLLECTION
+            timeframes = {
+                'H1': {'tf': mt5.TIMEFRAME_H1, 'count': 24},    # 24 hours (main trend)
+                'M15': {'tf': mt5.TIMEFRAME_M15, 'count': 40},  # 10 hours (entry trend)
+                'M5': {'tf': mt5.TIMEFRAME_M5, 'count': 60},    # 5 hours (momentum)
+                'M1': {'tf': mt5.TIMEFRAME_M1, 'count': 100}    # 100 minutes (timing)
+            }
             
-            if rates is not None and len(rates) > 0:
-                rate = rates[0]
-                market_data = {
-                    'time': rate[0],
-                    'open': float(rate[1]),
-                    'high': float(rate[2]),
-                    'low': float(rate[3]),
-                    'close': float(rate[4]),
-                    'volume': float(rate[5]) if len(rate) > 5 else 0,
-                    'timestamp': time.time()  # Add timestamp
-                }
+            # Initialize storage if not exists
+            if not hasattr(self, 'multi_tf_data'):
+                self.multi_tf_data = {}
                 
-                # Add to cache (keep recent 100)
-                self.market_data_cache.append(market_data)
-                if len(self.market_data_cache) > 100:
-                    self.market_data_cache = self.market_data_cache[-100:]
+            # Collect data from all timeframes
+            for tf_name, tf_config in timeframes.items():
+                rates = mt5.copy_rates_from_pos(self.symbol, tf_config['tf'], 0, tf_config['count'])
+                
+                if rates is not None and len(rates) > 0:
+                    # Convert to list of dicts for easier access
+                    tf_data = []
+                    for rate in rates:
+                        tf_data.append({
+                            'time': rate[0],
+                            'open': float(rate[1]),
+                            'high': float(rate[2]),
+                            'low': float(rate[3]),
+                            'close': float(rate[4]),
+                            'volume': float(rate[5]) if len(rate) > 5 else 0
+                        })
                     
-                # Debug log
-                print(f"📊 Market Update: {market_data['close']:.2f} at {datetime.now().strftime('%H:%M:%S')}")
+                    self.multi_tf_data[tf_name] = tf_data
+                    
+            # Keep M1 in original cache for compatibility
+            if 'M1' in self.multi_tf_data and self.multi_tf_data['M1']:
+                self.market_data_cache = self.multi_tf_data['M1'][-100:]  # Keep last 100
                 
-            else:
-                print("⚠️ No market data received")
+            # Debug current price
+            if self.market_data_cache:
+                current_price = self.market_data_cache[-1]['close']
+                print(f"📊 Multi-TF Update: {current_price:.2f} at {datetime.now().strftime('%H:%M:%S')}")
                 
         except Exception as e:
-            print(f"❌ Market data error: {e}")
+            print(f"❌ Multi-TF data error: {e}")
 
+    # 2. เพิ่ม Professional Analysis Functions
+
+    def analyze_main_trend(self):
+        """Analyze H1 trend direction"""
+        try:
+            if 'H1' not in self.multi_tf_data or len(self.multi_tf_data['H1']) < 10:
+                return 'NEUTRAL'
+                
+            h1_data = self.multi_tf_data['H1']
+            
+            # EMA trend analysis
+            recent_closes = [bar['close'] for bar in h1_data[-10:]]
+            ema_short = sum(recent_closes[-5:]) / 5  # 5-period EMA
+            ema_long = sum(recent_closes) / 10       # 10-period EMA
+            
+            current_price = recent_closes[-1]
+            
+            # Trend strength
+            if current_price > ema_short > ema_long:
+                trend_strength = (current_price - ema_long) / ema_long * 100
+                if trend_strength > 0.5:  # Strong uptrend
+                    return 'STRONG_UP'
+                else:
+                    return 'UP'
+            elif current_price < ema_short < ema_long:
+                trend_strength = (ema_long - current_price) / ema_long * 100
+                if trend_strength > 0.5:  # Strong downtrend
+                    return 'STRONG_DOWN'
+                else:
+                    return 'DOWN'
+            else:
+                return 'NEUTRAL'
+                
+        except Exception as e:
+            print(f"Main trend error: {e}")
+            return 'NEUTRAL'
+
+    def analyze_entry_momentum(self):
+        """Analyze M15 and M5 momentum for entry timing"""
+        try:
+            momentum_score = 0
+            
+            # M15 momentum
+            if 'M15' in self.multi_tf_data and len(self.multi_tf_data['M15']) >= 5:
+                m15_data = self.multi_tf_data['M15']
+                m15_closes = [bar['close'] for bar in m15_data[-5:]]
+                
+                # Price momentum
+                price_momentum = (m15_closes[-1] - m15_closes[0]) / m15_closes[0] * 100
+                momentum_score += price_momentum * 2  # Weight M15 higher
+                
+            # M5 momentum
+            if 'M5' in self.multi_tf_data and len(self.multi_tf_data['M5']) >= 10:
+                m5_data = self.multi_tf_data['M5']
+                m5_closes = [bar['close'] for bar in m5_data[-10:]]
+                
+                # Recent momentum (last 5 bars)
+                recent_momentum = (m5_closes[-1] - m5_closes[-5]) / m5_closes[-5] * 100
+                momentum_score += recent_momentum
+                
+            return momentum_score
+            
+        except Exception as e:
+            print(f"Momentum error: {e}")
+            return 0
+
+    def calculate_multi_tf_volatility(self):
+        """Calculate volatility across timeframes"""
+        try:
+            total_volatility = 0
+            
+            # H1 volatility (main market volatility)
+            if 'H1' in self.multi_tf_data and len(self.multi_tf_data['H1']) >= 5:
+                h1_data = self.multi_tf_data['H1'][-5:]
+                h1_ranges = [(bar['high'] - bar['low']) for bar in h1_data]
+                h1_avg_range = sum(h1_ranges) / len(h1_ranges)
+                total_volatility += h1_avg_range * 10  # Scale H1 volatility
+                
+            # M15 volatility (entry volatility)
+            if 'M15' in self.multi_tf_data and len(self.multi_tf_data['M15']) >= 10:
+                m15_data = self.multi_tf_data['M15'][-10:]
+                m15_ranges = [(bar['high'] - bar['low']) for bar in m15_data]
+                m15_avg_range = sum(m15_ranges) / len(m15_ranges)
+                total_volatility += m15_avg_range * 5  # Medium weight
+                
+            # M5 volatility (immediate volatility)
+            if 'M5' in self.multi_tf_data and len(self.multi_tf_data['M5']) >= 20:
+                m5_data = self.multi_tf_data['M5'][-20:]
+                m5_ranges = [(bar['high'] - bar['low']) for bar in m5_data]
+                m5_avg_range = sum(m5_ranges) / len(m5_ranges)
+                total_volatility += m5_avg_range * 2  # Lower weight
+                
+            return total_volatility
+            
+        except Exception as e:
+            print(f"Multi-TF volatility error: {e}")
+            return 0
+
+    def detect_support_resistance(self):
+        """Detect key support/resistance levels"""
+        try:
+            levels = {'support': [], 'resistance': []}
+            
+            # Use H1 and M15 for S/R detection
+            for tf_name in ['H1', 'M15']:
+                if tf_name not in self.multi_tf_data:
+                    continue
+                    
+                tf_data = self.multi_tf_data[tf_name]
+                if len(tf_data) < 20:
+                    continue
+                    
+                # Find swing highs and lows
+                highs = [bar['high'] for bar in tf_data[-20:]]
+                lows = [bar['low'] for bar in tf_data[-20:]]
+                
+                # Resistance levels (recent highs)
+                max_high = max(highs)
+                levels['resistance'].append(max_high)
+                
+                # Support levels (recent lows)
+                min_low = min(lows)
+                levels['support'].append(min_low)
+                
+            return levels
+            
+        except Exception as e:
+            print(f"S/R detection error: {e}")
+            return {'support': [], 'resistance': []}
+    
 
     def _get_current_price(self):
         """Get current market price"""
@@ -1703,21 +2083,6 @@ class TradingEnvironment(gym.Env):
         except:
             return False
             
-    def _execute_recovery_action(self, recovery_action):
-        """Execute recovery action"""
-        try:
-            if recovery_action == 1:  # Martingale
-                self.recovery_engine.activate_martingale()
-            elif recovery_action == 2:  # Grid
-                self.recovery_engine.activate_grid()
-            elif recovery_action == 3:  # Hedge
-                self.recovery_engine.activate_hedge()
-                
-            self.recovery_active = True
-            self.recovery_level += 1
-            
-        except Exception as e:
-            print(f"Error executing recovery action: {e}")
             
     def _execute_hedge_action(self, lot_size):
         """Execute hedge action"""

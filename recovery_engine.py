@@ -380,7 +380,19 @@ class RecoveryEngine:
             total_pnl = sum(pos.get('profit', 0) for pos in positions)
             
             # Strategy 1: Take profit if total PnL is good
-            if total_pnl >= 100:  # $100 profit threshold
+            # Get current balance
+            account_info = mt5_interface.get_account_info()
+            current_balance = account_info.get('balance', 1000) if account_info else 1000
+
+            # Calculate percentage threshold
+            profit_threshold_pct = 2.5  # 2.5%
+            profit_threshold = current_balance * (profit_threshold_pct / 100)
+
+            print(f"💼 Balance: ${current_balance:.2f}")
+            print(f"🎯 Profit threshold: ${profit_threshold:.2f} ({profit_threshold_pct}%)")
+
+            if total_pnl >= profit_threshold:  # ใช้ % แทน fix $100
+                self.log_recovery_event(f"Taking total profit: ${total_pnl:.2f} ({profit_threshold_pct}% threshold)")
                 self.log_recovery_event(f"Taking total profit: ${total_pnl:.2f}")
                 return mt5_interface.close_all_positions(symbol)
                 

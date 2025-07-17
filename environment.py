@@ -83,6 +83,52 @@ class TradingEnvironment(gym.Env):
         self.active_positions_count = 0
         self.entry_cooldown = 10  # 10 seconds between entries
         self.analysis_mode = 'ENTRY'  # ENTRY, MANAGEMENT, RECOVERY
+        self.current_balance = 1000.0
+        self.balance_update_time = 0
+    
+    def get_current_balance(self):
+            """Helper method to get current balance with caching"""
+            try:
+                # อัพเดท balance ทุก 5 วินาที
+                current_time = time.time()
+                if current_time - self.balance_update_time > 5:
+                    if hasattr(self, 'mt5_interface'):
+                        account_info = self.mt5_interface.get_account_info()
+                        if account_info:
+                            self.current_balance = account_info.get('balance', self.current_balance)
+                            self.balance_update_time = current_time
+                            
+                return self.current_balance
+                
+            except Exception as e:
+                print(f"Error getting balance: {e}")
+                return self.current_balance
+
+    def calculate_percentage_thresholds(self, profit_pct=2.5, loss_pct=5.0):
+        """Helper method to calculate percentage thresholds"""
+        try:
+            current_balance = self.get_current_balance()
+            
+            profit_threshold = current_balance * (profit_pct / 100)
+            loss_threshold = current_balance * (loss_pct / 100)
+            
+            return {
+                'balance': current_balance,
+                'profit_threshold': profit_threshold,
+                'loss_threshold': loss_threshold,
+                'profit_pct': profit_pct,
+                'loss_pct': loss_pct
+            }
+            
+        except Exception as e:
+            print(f"Error calculating thresholds: {e}")
+            return {
+                'balance': 1000.0,
+                'profit_threshold': 25.0,
+                'loss_threshold': 50.0,
+                'profit_pct': 2.5,
+                'loss_pct': 5.0
+            }
 
     def reset(self, seed=None, options=None):
         """Reset the environment to initial state"""
@@ -181,6 +227,25 @@ class TradingEnvironment(gym.Env):
         print(f"   Original action_type: {action_type}")
         
         try:
+            # ✅ ประกาศตัวแปรสำคัญตั้งแต่ต้น method
+            current_balance = 1000  # Default
+            loss_threshold_pct = 5.0  # 5%
+            loss_threshold = 50.0    # Default $50
+            profit_threshold_pct = 2.5  # 2.5%
+            profit_threshold = 25.0     # Default $25
+            
+            # Get current balance
+            if hasattr(self, 'mt5_interface'):
+                try:
+                    account_info = self.mt5_interface.get_account_info()
+                    if account_info:
+                        current_balance = account_info.get('balance', 1000)
+                        loss_threshold = current_balance * (loss_threshold_pct / 100)
+                        profit_threshold = current_balance * (profit_threshold_pct / 100)
+                except Exception as e:
+                    print(f"Error getting balance in _execute_action: {e}")
+                    # ใช้ค่า default ที่ประกาศไว้แล้ว
+            
             # 🎯 UPDATE POSITION STATE FIRST
             self.update_position_state()
             
@@ -217,9 +282,9 @@ class TradingEnvironment(gym.Env):
                     print("🚫 NEW ENTRY BLOCKED - Converting to HOLD")
                     action_type = 0.1  # Force hold
             
-            # Check training mode
-            is_training_mode = self.config.get('training_mode', True)
-            print(f"🔍 DEBUG training_mode: {is_training_mode}")
+            # 🔥 FORCE LIVE TRADING MODE (แก้ไขตรงนี้)
+            is_training_mode = False  # ← แก้จาก self.config.get('training_mode', True)
+            print(f"🚀 TRADING MODE: {'SIMULATED' if is_training_mode else 'LIVE'}")
             
             # 💼 Position sizing (existing code)
             if 0.3 <= action_type < 2.7:
@@ -312,12 +377,12 @@ class TradingEnvironment(gym.Env):
             # 🔄 ENHANCED RECOVERY SYSTEM
             if not is_training_mode and hasattr(self, 'recovery_engine'):
                 # Check if recovery is needed
-                if total_pnl < -30 or self.analysis_mode == 'RECOVERY':
+                if total_pnl < -loss_threshold or self.analysis_mode == 'RECOVERY':
                     # Get current account info
                     account_info = self.mt5_interface.get_account_info()
                     current_equity = account_info.get('equity', 0) if account_info else 0
                     
-                    print(f"🔄 RECOVERY CHECK: PnL=${total_pnl:.2f}, Mode={self.analysis_mode}")
+                    print(f"🔄 RECOVERY CHECK: PnL=${total_pnl:.2f}, Threshold=${loss_threshold:.2f}, Mode={self.analysis_mode}")
                     
                     # Check recovery opportunities  
                     profit_opportunities = self.recovery_engine.check_profit_opportunities(
@@ -345,8 +410,8 @@ class TradingEnvironment(gym.Env):
                         self.analysis_mode = 'ENTRY'
                     
                     # If still in loss, activate recovery
-                    elif total_pnl < -50:
-                        print(f"🚨 ACTIVATING RECOVERY: Loss=${total_pnl:.2f}")
+                    elif total_pnl < -loss_threshold:
+                        print(f"🚨 ACTIVATING RECOVERY: Loss=${total_pnl:.2f} > {loss_threshold_pct}% threshold (${loss_threshold:.2f})")
                         recovery_activated = self.recovery_engine.activate_recovery(
                             symbol=self.symbol,
                             mt5_interface=self.mt5_interface,
@@ -371,82 +436,152 @@ class TradingEnvironment(gym.Env):
             reward = -5.0
             
         return reward
-    
-    def get_appropriate_action(self, original_action):
-        """Get appropriate action based on current position state with RECOVERY ENGINE"""
+
+    def get_balance_and_thresholds(self, profit_pct=2.5, loss_pct=5.0):
+        """Helper method to safely get balance and calculate thresholds"""
         try:
+            # Default values
+            current_balance = 1000.0
+            
+            # Try to get real balance
+            if hasattr(self, 'mt5_interface'):
+                try:
+                    account_info = self.mt5_interface.get_account_info()
+                    if account_info:
+                        current_balance = account_info.get('balance', 1000.0)
+                except Exception as e:
+                    print(f"Error getting account info: {e}")
+            
+            # Calculate thresholds
+            profit_threshold = current_balance * (profit_pct / 100)
+            loss_threshold = current_balance * (loss_pct / 100)
+            
+            return {
+                'balance': current_balance,
+                'profit_threshold': profit_threshold,
+                'loss_threshold': loss_threshold,
+                'profit_pct': profit_pct,
+                'loss_pct': loss_pct
+            }
+            
+        except Exception as e:
+            print(f"Error in get_balance_and_thresholds: {e}")
+            # Return safe defaults
+            return {
+                'balance': 1000.0,
+                'profit_threshold': 25.0,
+                'loss_threshold': 50.0,
+                'profit_pct': 2.5,
+                'loss_pct': 5.0
+            }
+
+    def get_appropriate_action(self, original_action):
+        """Get appropriate action with PERCENTAGE THRESHOLDS - FIXED VERSION"""
+        try:
+            # ✅ ประกาศตัวแปรทั้งหมดตั้งแต่ต้น
+            current_balance = 1000  # Default
+            profit_threshold_pct = 2.5  # 2.5%
+            loss_threshold_pct = 5.0   # 5%
+            profit_threshold = 25.0    # Default $25
+            loss_threshold = 50.0      # Default $50
+            
+            # Get current balance and calculate thresholds
+            if hasattr(self, 'mt5_interface'):
+                try:
+                    account_info = self.mt5_interface.get_account_info()
+                    if account_info:
+                        current_balance = account_info.get('balance', 1000)
+                        profit_threshold = current_balance * (profit_threshold_pct / 100)
+                        loss_threshold = current_balance * (loss_threshold_pct / 100)
+                except Exception as e:
+                    print(f"Error getting balance in get_appropriate_action: {e}")
+                    # ใช้ค่า default ที่ประกาศไว้แล้ว
+            
             if self.analysis_mode == 'ENTRY':
-                # In entry mode - allow original AI decision
                 return original_action
                 
             elif self.analysis_mode == 'MANAGEMENT':
-                # In management mode - focus on profit taking and position management
                 positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
                 total_pnl = sum(pos.get('profit', 0) for pos in positions)
                 
-                # 💰 Smart profit taking with recovery engine settings
+                # 💰 Smart profit taking with percentage thresholds
                 if hasattr(self, 'recovery_engine'):
-                    recovery_status = self.recovery_engine.get_status()
-                    profit_settings = recovery_status.get('profit_settings', {})
-                    min_profit_target = profit_settings.get('min_profit_target', 25)
-                    
-                    if total_pnl > min_profit_target:
-                        print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} (target: ${min_profit_target:.2f})")
-                        return 3.2  # Force close for profit
+                    try:
+                        recovery_status = self.recovery_engine.get_status()
+                        profit_settings = recovery_status.get('profit_settings', {})
+                        min_profit_target = profit_settings.get('min_profit_target', 25)  # Default USD
+                        
+                        # แปลง USD เป็น % ถ้าจำเป็น
+                        if min_profit_target > 10:  # ถ้า > 10 แสดงว่าเป็น USD
+                            min_profit_pct = (min_profit_target / current_balance) * 100
+                            profit_threshold = min_profit_target  # ใช้ USD ตรงๆ
+                        else:
+                            min_profit_pct = min_profit_target
+                            profit_threshold = current_balance * (min_profit_pct / 100)
+                        
+                        if total_pnl > profit_threshold:
+                            print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} (Target: ${profit_threshold:.2f})")
+                            return 3.2
+                    except Exception as e:
+                        print(f"Error in recovery engine profit check: {e}")
+                        # Fall back to default threshold
+                        if total_pnl > profit_threshold:
+                            print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} (Default: ${profit_threshold:.2f})")
+                            return 3.2
                 else:
-                    if total_pnl > 30:  # Default profit target
-                        print("💰 MANAGEMENT: Recommending profit taking")
+                    if total_pnl > profit_threshold:
+                        print(f"💰 MANAGEMENT: Taking profit at ${total_pnl:.2f} ({profit_threshold_pct}% of ${current_balance:.2f})")
                         return 3.2
-                    
-                # Check if need recovery
-                if total_pnl < -50:  # Significant loss
-                    print("🔄 MANAGEMENT: Switching to recovery mode")
+                        
+                # Check if need recovery - ✅ ตอนนี้ loss_threshold ถูกประกาศแล้ว
+                if total_pnl < -loss_threshold:
+                    print(f"🔄 MANAGEMENT: Switching to recovery at ${total_pnl:.2f} ({loss_threshold_pct}% loss = ${loss_threshold:.2f})")
                     self.analysis_mode = 'RECOVERY'
                     self.position_state = 'RECOVERY'
-                    return self.get_appropriate_action(original_action)  # Re-evaluate in recovery mode
+                    return self.get_appropriate_action(original_action)
                     
-                # Hold and monitor
                 print("📊 MANAGEMENT: Hold and monitor")
-                return 0.1  # Force hold
+                return 0.1
                     
             elif self.analysis_mode == 'RECOVERY':
-                # 🚨 ACTIVATE RECOVERY ENGINE
+                # Recovery mode logic
                 positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
                 total_pnl = sum(pos.get('profit', 0) for pos in positions)
                 
                 if hasattr(self, 'recovery_engine'):
-                    # Get current account info
-                    account_info = self.mt5_interface.get_account_info() if hasattr(self, 'mt5_interface') else None
-                    current_equity = account_info.get('equity', 0) if account_info else 0
-                    
-                    print(f"🚨 RECOVERY ENGINE: Activating for loss ${total_pnl:.2f}")
-                    
-                    # Activate recovery system
-                    success = self.recovery_engine.activate_recovery(
-                        symbol=self.symbol,
-                        mt5_interface=self.mt5_interface,
-                        current_pnl=total_pnl,
-                        current_equity=current_equity,
-                        recovery_type='combined'  # Use smart combined recovery
-                    )
-                    
-                    if success:
-                        print("✅ RECOVERY: Recovery system activated")
-                        # Let recovery system handle, return hold for now
-                        return 0.1
-                    else:
-                        print("❌ RECOVERY: Failed to activate, trying hedge")
-                        return 4.0  # Try hedge as fallback
+                    try:
+                        account_info = self.mt5_interface.get_account_info() if hasattr(self, 'mt5_interface') else None
+                        current_equity = account_info.get('equity', 0) if account_info else 0
+                        
+                        print(f"🚨 RECOVERY ENGINE: Activating for loss ${total_pnl:.2f}")
+                        
+                        success = self.recovery_engine.activate_recovery(
+                            symbol=self.symbol,
+                            mt5_interface=self.mt5_interface,
+                            current_pnl=total_pnl,
+                            current_equity=current_equity,
+                            recovery_type='combined'
+                        )
+                        
+                        if success:
+                            print("✅ RECOVERY: Recovery system activated")
+                            return 0.1
+                        else:
+                            print("❌ RECOVERY: Failed to activate, trying hedge")
+                            return 4.0
+                    except Exception as e:
+                        print(f"Recovery engine error: {e}")
+                        return 4.0  # Fallback to hedge
                 else:
                     print("🚨 RECOVERY: No recovery engine, using hedge")
-                    return 4.0  # Force hedge if no recovery engine
+                    return 4.0
                     
             return original_action
             
         except Exception as e:
             print(f"Action adjustment error: {e}")
             return original_action
-    
+        
     def check_recovery_completion(self):
         """Check if recovery is completed and reset state"""
         try:
@@ -476,7 +611,22 @@ class TradingEnvironment(gym.Env):
             print(f"Recovery status error: {e}")
             return {'recovery_active': False}
 
-
+    def check_recovery_completion(self):
+        """Check if recovery is completed and reset state"""
+        try:
+            if hasattr(self, 'recovery_engine'):
+                completion = self.recovery_engine.check_recovery_completion(self.mt5_interface)
+                
+                if completion:
+                    print("🎉 RECOVERY COMPLETED - Resetting to entry mode")
+                    self.position_state = 'READY'
+                    self.analysis_mode = 'ENTRY'
+                    return True
+                    
+            return False
+        except Exception as e:
+            print(f"Recovery completion check error: {e}")
+            return False
 
     # เพิ่ม helper method ใหม่
     def _get_action_name(self, action_type):
@@ -895,12 +1045,29 @@ class TradingEnvironment(gym.Env):
             
             print(f"💰 PnL: Raw=${total_pnl:.2f}, Spread=${spread_cost:.2f}, Net=${adjusted_pnl:.2f}")
             
-            # 1. Profit/Loss management
-            if adjusted_pnl > spread_cost + 20:
-                print(f"💰 TAKE PROFIT: ${adjusted_pnl:.2f}")
+            # Get current balance for percentage calculation
+            current_balance = 1000  # Default
+            if hasattr(self, 'mt5_interface'):
+                account_info = self.mt5_interface.get_account_info()
+                if account_info:
+                    current_balance = account_info.get('balance', 1000)
+
+            # Calculate percentage thresholds
+            profit_threshold_pct = 2.5  # 2.5% profit
+            loss_threshold_pct = 5.0    # 5% loss
+
+            profit_threshold = current_balance * (profit_threshold_pct / 100)
+            loss_threshold = current_balance * (loss_threshold_pct / 100)
+
+            print(f"💰 Balance: ${current_balance:.2f}")
+            print(f"📊 Thresholds: Profit=${profit_threshold:.2f} ({profit_threshold_pct}%), Loss=${loss_threshold:.2f} ({loss_threshold_pct}%)")
+
+            # 1. Profit/Loss management (ใช้ % แทน)
+            if adjusted_pnl > profit_threshold:
+                print(f"💰 TAKE PROFIT: ${adjusted_pnl:.2f} > {profit_threshold_pct}% threshold")
                 return 3.2
-            if adjusted_pnl < -(spread_cost + 30):
-                print(f"🚨 STOP LOSS: ${adjusted_pnl:.2f}")
+            if adjusted_pnl < -loss_threshold:
+                print(f"🚨 STOP LOSS: ${adjusted_pnl:.2f} < -{loss_threshold_pct}% threshold")
                 return 3.5
                 
             # 2. 🎯 PROFESSIONAL MULTI-TIMEFRAME ANALYSIS
@@ -978,10 +1145,31 @@ class TradingEnvironment(gym.Env):
             return action_type
 
     def update_position_state(self):
-        """Update position state based on current market positions"""
+        """Update position state with RECOVERY CHECK - FIXED VERSION"""
         try:
             positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
             self.active_positions_count = len(positions)
+            
+            # ✅ ประกาศตัวแปรทั้งหมดตั้งแต่ต้น
+            current_balance = 1000  # Default balance
+            loss_threshold_pct = 5.0  # 5% loss threshold
+            loss_threshold = 50.0  # Default $50
+            
+            # Get current balance
+            if hasattr(self, 'mt5_interface'):
+                try:
+                    account_info = self.mt5_interface.get_account_info()
+                    if account_info:
+                        current_balance = account_info.get('balance', 1000)
+                        loss_threshold = current_balance * (loss_threshold_pct / 100)
+                except Exception as e:
+                    print(f"Error getting balance: {e}")
+                    # ใช้ค่า default ที่ประกาศไว้แล้ว
+            
+            # 🔄 Check recovery completion first
+            if self.analysis_mode == 'RECOVERY':
+                if self.check_recovery_completion():
+                    return  # State already reset
             
             # Determine current state
             if self.active_positions_count == 0:
@@ -990,18 +1178,27 @@ class TradingEnvironment(gym.Env):
                 print("🟢 STATE: READY - No positions, ready for new entry")
                 
             elif self.active_positions_count > 0:
-                # Check if positions are profitable or need management
                 total_pnl = sum(pos.get('profit', 0) for pos in positions)
                 
-                if total_pnl > 20:  # In profit
+                # Get recovery status
+                recovery_status = self.get_recovery_status()
+                recovery_active = recovery_status.get('recovery_active', False)
+                
+                if recovery_active:
+                    self.position_state = 'RECOVERY'
+                    self.analysis_mode = 'RECOVERY'
+                    recovery_level = recovery_status.get('recovery_level', 0)
+                    print(f"🔄 STATE: RECOVERY - Level {recovery_level}, PnL: ${total_pnl:.2f}")
+                    
+                elif total_pnl > 20:  # In profit (ใช้ค่า fix ก่อน จะค่อยแก้เป็น % ทีหลัง)
                     self.position_state = 'ACTIVE'
                     self.analysis_mode = 'MANAGEMENT'
                     print(f"💰 STATE: ACTIVE - {self.active_positions_count} positions, PnL: ${total_pnl:.2f}")
                     
-                elif total_pnl < -50:  # In significant loss
+                elif total_pnl < -loss_threshold:  # ✅ ตอนนี้ loss_threshold ถูกประกาศแล้ว
                     self.position_state = 'RECOVERY'
                     self.analysis_mode = 'RECOVERY'
-                    print(f"🚨 STATE: RECOVERY - {self.active_positions_count} positions, Loss: ${total_pnl:.2f}")
+                    print(f"🚨 STATE: RECOVERY - {self.active_positions_count} positions, Loss: ${total_pnl:.2f} (Threshold: ${loss_threshold:.2f})")
                     
                 else:  # Normal management
                     self.position_state = 'ACTIVE'
@@ -1038,54 +1235,6 @@ class TradingEnvironment(gym.Env):
             print(f"Entry permission error: {e}")
             return False
 
-    def update_position_state(self):
-        """Update position state based on current market positions with RECOVERY CHECK"""
-        try:
-            positions = self.mt5_interface.get_positions() if hasattr(self, 'mt5_interface') else []
-            self.active_positions_count = len(positions)
-            
-            # 🔄 Check recovery completion first
-            if self.analysis_mode == 'RECOVERY':
-                if self.check_recovery_completion():
-                    return  # State already reset by check_recovery_completion
-            
-            # Determine current state
-            if self.active_positions_count == 0:
-                self.position_state = 'READY'
-                self.analysis_mode = 'ENTRY'
-                print("🟢 STATE: READY - No positions, ready for new entry")
-                
-            elif self.active_positions_count > 0:
-                # Check if positions are profitable or need management
-                total_pnl = sum(pos.get('profit', 0) for pos in positions)
-                
-                # Get recovery status
-                recovery_status = self.get_recovery_status()
-                recovery_active = recovery_status.get('recovery_active', False)
-                
-                if recovery_active:
-                    self.position_state = 'RECOVERY'
-                    self.analysis_mode = 'RECOVERY'
-                    recovery_level = recovery_status.get('recovery_level', 0)
-                    print(f"🔄 STATE: RECOVERY - Level {recovery_level}, PnL: ${total_pnl:.2f}")
-                    
-                elif total_pnl > 20:  # In profit
-                    self.position_state = 'ACTIVE'
-                    self.analysis_mode = 'MANAGEMENT'
-                    print(f"💰 STATE: ACTIVE - {self.active_positions_count} positions, PnL: ${total_pnl:.2f}")
-                    
-                elif total_pnl < -50:  # In significant loss, but recovery not active yet
-                    self.position_state = 'RECOVERY'
-                    self.analysis_mode = 'RECOVERY'
-                    print(f"🚨 STATE: RECOVERY - {self.active_positions_count} positions, Loss: ${total_pnl:.2f}")
-                    
-                else:  # Normal management
-                    self.position_state = 'ACTIVE'
-                    self.analysis_mode = 'MANAGEMENT'
-                    print(f"📊 STATE: ACTIVE - {self.active_positions_count} positions, PnL: ${total_pnl:.2f}")
-                    
-        except Exception as e:
-            print(f"Position state update error: {e}")
                 
 
     def _calculate_total_spread_cost(self, positions):

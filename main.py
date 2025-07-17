@@ -295,13 +295,13 @@ class TradingGUI:
         profit_params.pack(fill='x', padx=10, pady=5)
         
         # Min Profit Target
-        tk.Label(profit_params, text="Min Profit Target ($):").grid(row=0, column=0, sticky='w', padx=5, pady=2)
-        self.min_profit_var = tk.DoubleVar(value=self.config.get('min_profit_target', 25))
+        tk.Label(profit_params, text="Min Profit Target (%):").grid(row=0, column=0, sticky='w', padx=5, pady=2)
+        self.min_profit_var = tk.DoubleVar(value=self.config.get('min_profit_pct', 2.5))
         tk.Entry(profit_params, textvariable=self.min_profit_var).grid(row=0, column=1, padx=5, pady=2)
         
         # Trailing Stop Distance
-        tk.Label(profit_params, text="Trailing Stop ($):").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        self.trailing_stop_var = tk.DoubleVar(value=self.config.get('trailing_stop_distance', 15))
+        tk.Label(profit_params, text="Trailing Stop (%):").grid(row=1, column=0, sticky='w', padx=5, pady=2)
+        self.trailing_stop_var = tk.DoubleVar(value=self.config.get('trailing_stop_pct', 1.5))
         tk.Entry(profit_params, textvariable=self.trailing_stop_var).grid(row=1, column=1, padx=5, pady=2)
         
         # Quick Profit Mode
@@ -1106,9 +1106,8 @@ class TradingGUI:
         try:
             print("DEBUG: Starting LIVE trading...")
             
-            is_training_mode = True
-            print(f"🔍 DEBUG: Checkbox value = {is_training_mode}")  # เพิ่มบรรทัดนี้
-
+            is_training_mode = self.training_mode_var.get()
+            print(f"🔍 DEBUG: Training mode from GUI = {is_training_mode}")
             self.config['training_mode'] = is_training_mode
             self.mt5_interface.set_training_mode(is_training_mode)
 

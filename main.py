@@ -1106,12 +1106,12 @@ class TradingGUI:
         try:
             print("DEBUG: Starting LIVE trading...")
             
-            # เปลี่ยนเป็น LIVE MODE
-            self.config['training_mode'] = False  # ← เพิ่มบรรทัดนี้
-            
-            # Set live mode for MT5 interface
-            self.mt5_interface.set_training_mode(False)  # ← เพิ่มบรรทัดนี้
-            
+            is_training_mode = True
+            print(f"🔍 DEBUG: Checkbox value = {is_training_mode}")  # เพิ่มบรรทัดนี้
+
+            self.config['training_mode'] = is_training_mode
+            self.mt5_interface.set_training_mode(is_training_mode)
+
             # Initialize trading environment and RL agent
             self.trading_env = TradingEnvironment(self.mt5_interface, self.recovery_engine, self.config)
             self.rl_agent = RLAgent(self.trading_env, self.config)

@@ -190,7 +190,7 @@ class TradingEnvironment(gym.Env):
                 print(f"🔄 Using original action: {action_type:.3f}")            
             
             # Check if in training mode
-            is_training_mode = self.config.get('training_mode', True)
+            is_training_mode = True
             print(f"🔍 DEBUG training_mode: {is_training_mode}")
             
             # Calculate position size (now using lot_multiplier properly)
@@ -730,7 +730,7 @@ class TradingEnvironment(gym.Env):
             
             print(f"💰 PnL Analysis: Raw={total_pnl:.2f}, Spread Cost={spread_cost:.2f}, Net={adjusted_pnl:.2f}")
             
-            # ต้องกำไรมากกว่า spread cost + buffer
+            # 1. 💰 PROFIT TAKING LOGIC
             min_profit_target = spread_cost + 20  # Spread cost + $20 buffer
 
             if adjusted_pnl > min_profit_target:
@@ -738,23 +738,11 @@ class TradingEnvironment(gym.Env):
                 return 3.2
                 
             # 2. 🚨 LOSS PROTECTION WITH SPREAD AWARENESS
-            # อนุญาตขาดทุน spread cost + $30 ก่อนจะ stop
-            max_acceptable_loss = -(spread_cost + 30)
+            max_acceptable_loss = -(spread_cost + 30)  # Allow spread cost + $30 loss
 
             if adjusted_pnl < max_acceptable_loss:
                 print(f"🚨 STOP LOSS: Net ${adjusted_pnl:.2f} < limit ${max_acceptable_loss:.2f}")
                 return 3.5
-            
-            if adjusted_pnl > min_profit_target:
-                print(f"💰 SPREAD-AWARE PROFIT: Net profit ${adjusted_pnl:.2f} > target ${min_profit_target:.2f}")
-                return 3.2  # Force close with higher confidence
-                
-            # 2. 🚨 SPREAD-AWARE LOSS PROTECTION  
-            max_acceptable_loss = -100 - spread_cost  # รวม spread cost
-            
-            if adjusted_pnl < max_acceptable_loss:
-                print(f"🚨 SPREAD-AWARE STOP: Net loss ${adjusted_pnl:.2f} < limit ${max_acceptable_loss:.2f}")
-                return 3.5  # Force close immediately
                 
             # 3. 🔧 REALISTIC TRADE ANALYSIS FOR YOUR BROKER
             if 0.3 <= action_type < 2.7:  # Would open new position
@@ -766,72 +754,90 @@ class TradingEnvironment(gym.Env):
                 # Require 1.5x spread cost (balanced approach)
                 required_profit = spread_cost_for_trade * 1.5  # $0.675 for 0.01 lot
 
+                # ✅ FIXED: Initialize recent_prices properly
+                recent_prices = []
+                
                 # Analyze market movement potential
                 if hasattr(self, 'market_data_cache') and len(self.market_data_cache) >= 10:
-                    recent_prices = [data['close'] for data in self.market_data_cache[-10:]]
-                    
-                    if len(recent_prices) >= 5:
-                        # Look at different timeframes
-                        short_range = max(recent_prices[-3:]) - min(recent_prices[-3:])  # 3 bars
-                        medium_range = max(recent_prices[-5:]) - min(recent_prices[-5:])  # 5 bars
-                        long_range = max(recent_prices[-10:]) - min(recent_prices[-10:])  # 10 bars
+                    try:
+                        recent_prices = [data['close'] for data in self.market_data_cache[-10:]]
                         
-                        # Use the most promising range
-                        effective_range = max(short_range, medium_range * 0.6, long_range * 0.3)
-                        
-                        # Calculate realistic potential profit for 0.01 lot
-                        # XAUUSD: More realistic calculation for quick profits
-                        potential_profit = effective_range * 3.0  # Adjusted multiplier for realistic expectations
-
-                        print(f"📊 TRADE ANALYSIS:")
-                        print(f"   Lot size: {trading_lot_size}")
-                        print(f"   Spread cost: ${spread_cost_for_trade:.2f}")
-                        print(f"   Required: ${required_profit:.2f} (2x spread)")
-                        print(f"   Ranges: {short_range:.3f}|{medium_range:.3f}|{long_range:.3f}")
-                        print(f"   Potential: ${potential_profit:.2f}")
-                        
-                        if potential_profit < required_profit:
-                            print(f"⚠️ LOW POTENTIAL: ${potential_profit:.2f} < ${required_profit:.2f}")
-                            return 0.1  # Hold
-                        else:
-                            print(f"✅ GOOD POTENTIAL: ${potential_profit:.2f} ≥ ${required_profit:.2f}")
-                            # Allow trading
+                        if len(recent_prices) >= 5:
+                            # Look at different timeframes
+                            short_range = max(recent_prices[-3:]) - min(recent_prices[-3:])  # 3 bars
+                            medium_range = max(recent_prices[-5:]) - min(recent_prices[-5:])  # 5 bars
+                            long_range = max(recent_prices[-10:]) - min(recent_prices[-10:])  # 10 bars
                             
-                # Check volatility trend as backup
+                            # Use the most promising range
+                            effective_range = max(short_range, medium_range * 0.6, long_range * 0.3)
+                            
+                            # Calculate realistic potential profit for 0.01 lot
+                            potential_profit = effective_range * 3.0
+
+                            print(f"📊 TRADE ANALYSIS:")
+                            print(f"   Lot size: {trading_lot_size}")
+                            print(f"   Spread cost: ${spread_cost_for_trade:.2f}")
+                            print(f"   Required: ${required_profit:.2f} (1.5x spread)")
+                            print(f"   Ranges: {short_range:.3f}|{medium_range:.3f}|{long_range:.3f}")
+                            print(f"   Potential: ${potential_profit:.2f}")
+                            
+                            if potential_profit < required_profit:
+                                print(f"⚠️ LOW POTENTIAL: ${potential_profit:.2f} < ${required_profit:.2f}")
+                                return 0.1  # Hold
+                            else:
+                                print(f"✅ GOOD POTENTIAL: ${potential_profit:.2f} ≥ ${required_profit:.2f}")
+                                # Allow trading
+                                
+                    except Exception as e:
+                        print(f"Market data analysis error: {e}")
+                        recent_prices = []  # Reset to empty if error
+                        
+                # ✅ FIXED: Check volatility trend as backup with proper error handling
                 try:
                     if len(recent_prices) >= 5:
                         price_changes = [abs(recent_prices[i] - recent_prices[i-1]) for i in range(1, len(recent_prices))]
-                        avg_movement = sum(price_changes) / len(price_changes)
-                        volatility_profit = avg_movement * trading_lot_size * 100
                         
-                        print(f"📈 VOLATILITY: Avg move {avg_movement:.3f} = ${volatility_profit:.2f}")
-                        
-                        # If volatility is good, allow trading
-                        if volatility_profit >= required_profit * 0.5:  # 50% of required
-                            print(f"✅ GOOD VOLATILITY: ${volatility_profit:.2f} ≥ 50% required")
+                        if price_changes:  # ✅ Check if we have valid price changes
+                            avg_movement = sum(price_changes) / len(price_changes)
+                            volatility_profit = avg_movement * trading_lot_size * 100
+                            
+                            print(f"📈 VOLATILITY: Avg move {avg_movement:.3f} = ${volatility_profit:.2f}")
+                            
+                            # If volatility is good, allow trading
+                            if volatility_profit >= required_profit * 0.5:  # 50% of required
+                                print(f"✅ GOOD VOLATILITY: ${volatility_profit:.2f} ≥ 50% required")
+                            else:
+                                print(f"⚠️ LOW VOLATILITY: ${volatility_profit:.2f} < 50% required")
+                                return 0.1  # Hold
                         else:
-                            print(f"⚠️ LOW VOLATILITY: ${volatility_profit:.2f} < 50% required")
-                            return 0.1  # Hold
+                            print("⚠️ No valid price changes for volatility analysis")
                             
                 except Exception as e:
                     print(f"Volatility check error: {e}")
+                    # Continue without volatility check
 
             # 4. 🎯 SPREAD-EFFICIENT HOURS FOR YOUR BROKER
-            spread_info = self._get_current_spread_info()
-            current_spread = spread_info.get('spread_pips', 4.5)
+            try:
+                spread_info = self._get_current_spread_info()
+                current_spread = spread_info.get('spread_pips', 4.5)
 
-            # Your broker: 4.5 pips minimum, avoid if > 6 pips
-            if current_spread > 6.0:
-                if 0.3 <= action_type < 2.7:
-                    print(f"📈 HIGH SPREAD: {current_spread:.1f} pips > 6.0, avoiding trades")
-                    return 0.05
+                # Your broker: 4.5 pips minimum, avoid if > 6 pips
+                if current_spread > 6.0:
+                    if 0.3 <= action_type < 2.7:
+                        print(f"📈 HIGH SPREAD: {current_spread:.1f} pips > 6.0, avoiding trades")
+                        return 0.05
+            except Exception as e:
+                print(f"Spread check error: {e}")
                                 
             # 5. 🔄 POSITION OPTIMIZATION
-            if len(positions) > 3:  # With your spread cost, fewer positions better
-                total_position_cost = len(positions) * 45 * 0.01  # $0.45 per 0.01 lot
-                if abs(total_pnl) < total_position_cost:
-                    print(f"🔄 POSITION CLEANUP: PnL ${total_pnl:.2f} < position cost ${total_position_cost:.2f}")
-                    return 3.1  # Close to clean up
+            try:
+                if len(positions) > 3:  # With your spread cost, fewer positions better
+                    total_position_cost = len(positions) * 45 * 0.01  # $0.45 per 0.01 lot
+                    if abs(total_pnl) < total_position_cost:
+                        print(f"🔄 POSITION CLEANUP: PnL ${total_pnl:.2f} < position cost ${total_position_cost:.2f}")
+                        return 3.1  # Close to clean up
+            except Exception as e:
+                print(f"Position optimization error: {e}")
                                     
             # Apply original logic for other cases
             try:
@@ -845,7 +851,7 @@ class TradingEnvironment(gym.Env):
             import traceback
             traceback.print_exc()
             return action_type  # Return original action if any error
-                    
+                        
     def _calculate_total_spread_cost(self, positions):
         """Calculate total spread cost - FIXED FOR YOUR BROKER"""
         try:

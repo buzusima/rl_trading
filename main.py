@@ -16,7 +16,7 @@ except ImportError:
     except ImportError:
         print("Error: Cannot import matplotlib backend for tkinter")
         FigureCanvas = None
-        
+                
 import numpy as np
 
 from environment import TradingEnvironment

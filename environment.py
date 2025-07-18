@@ -276,22 +276,7 @@ class TradingEnvironment(gym.Env):
         
     def step(self, action):
         """Execute one step in the environment"""
-        if not self.is_market_open():
-            observation = self._get_observation()
-            reward = 0.0
-            done = False
-            info = {  # ← ใช้ dict ธรรมดาแทน
-                    'current_step': self.current_step,
-                    'episode_pnl': 0,
-                    'account_balance': 0,
-                    'account_equity': 0,
-                    'open_positions': 0,
-                    'recovery_active': False,
-                    'recovery_level': 0
-            }
-            print("MARKET CLOSED - Pausing training")
-            return observation, reward, done, False, info 
-        
+                
         self.current_step += 1
         # Update portfolio before action
         self.portfolio_manager.update_portfolio_status(self.mt5_interface)
@@ -583,54 +568,59 @@ class TradingEnvironment(gym.Env):
             }
 
     def get_dynamic_profit_threshold(self):
-        """อ่าน profit threshold จาก recovery_engine (GUI settings)"""
+        """อ่าน profit threshold เป็น USD"""
         try:
-            if hasattr(self, 'recovery_engine') and self.recovery_engine:
+            # อ่านจาก config (จาก GUI)
+            profit_target_usd = self.config.get('min_profit_target', 10)
+            
+            # หรือจาก recovery_engine
+            if hasattr(self, 'recovery_engine'):
                 recovery_status = self.recovery_engine.get_status()
                 profit_settings = recovery_status.get('profit_settings', {})
+                profit_target_usd = profit_settings.get('min_profit_target', profit_target_usd)
                 
-                # อ่านค่าจาก GUI
-                min_profit_target = profit_settings.get('min_profit_target', 25)
-                
-                # ถ้าเป็น USD value (>10) แปลงเป็น %
-                if min_profit_target > 10:
-                    # ได้ balance
-                    account_info = self.mt5_interface.get_account_info() if hasattr(self, 'mt5_interface') else None
-                    current_balance = account_info.get('balance', 1000) if account_info else 1000
-                    
-                    # แปลง USD เป็น %
-                    profit_threshold_pct = (min_profit_target / current_balance) * 100
-                    print(f"🔄 Dynamic Profit: ${min_profit_target} = {profit_threshold_pct:.2f}% of ${current_balance}")
-                    return profit_threshold_pct
-                else:
-                    # เป็น % อยู่แล้ว
-                    print(f"🔄 Dynamic Profit: {min_profit_target}%")
-                    return min_profit_target
-                    
-        except Exception as e:
-            print(f"Error getting dynamic profit threshold: {e}")
+            print(f"💰 Dynamic Profit Target: ${profit_target_usd}")
+            return profit_target_usd
             
-        # Fallback to default
-        return 2.5
-
+        except Exception as e:
+            print(f"Error getting profit threshold: {e}")
+            return 10  # Default $10
+    
     def get_dynamic_loss_threshold(self):
-        """อ่าน loss threshold จาก recovery_engine หรือ config"""
+        """อ่าน loss threshold เป็น USD"""
         try:
-            if hasattr(self, 'recovery_engine') and self.recovery_engine:
+            # อ่านจาก config (จาก GUI)
+            loss_limit_usd = self.config.get('max_loss_limit', 15)
+            
+            # หรือจาก recovery_engine
+            if hasattr(self, 'recovery_engine'):
                 recovery_status = self.recovery_engine.get_status()
                 profit_settings = recovery_status.get('profit_settings', {})
+                loss_limit_usd = profit_settings.get('max_loss_limit', loss_limit_usd)
                 
-                # อ่านค่า loss threshold (ถ้ามี)
-                loss_threshold = profit_settings.get('max_loss_pct', 5.0)
-                print(f"🔄 Dynamic Loss: {loss_threshold}%")
-                return loss_threshold
-                
-        except Exception as e:
-            print(f"Error getting dynamic loss threshold: {e}")
+            print(f"🚨 Dynamic Loss Limit: ${loss_limit_usd}")
+            return loss_limit_usd
             
-        # Fallback to default
-        return 5.0
-
+        except Exception as e:
+            print(f"Error getting loss threshold: {e}")
+            return 15  # Default $15
+    
+    def update_profit_settings(self, new_settings):
+        """Update profit settings from GUI"""
+        try:
+            self.config.update(new_settings)
+            
+            # Update recovery engine
+            if hasattr(self, 'recovery_engine'):
+                self.recovery_engine.update_profit_settings(new_settings)
+                
+            print(f"🎯 Environment profit settings updated: {new_settings}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Environment update error: {e}")
+            return False
+    
     def get_appropriate_action(self, original_action):
         """Get appropriate action with DYNAMIC PERCENTAGE THRESHOLDS"""
         try:
@@ -1168,29 +1158,26 @@ class TradingEnvironment(gym.Env):
             
             print(f"💰 PnL: Raw=${total_pnl:.2f}, Spread=${spread_cost:.2f}, Net=${adjusted_pnl:.2f}")
             
-            # Get current balance for percentage calculation
+            # 🆕 ใช้ dynamic thresholds แทน hard-coded
+            profit_threshold = self.get_dynamic_profit_threshold()  # ได้ USD จาก GUI
+            loss_threshold = self.get_dynamic_loss_threshold()      # ได้ USD จาก GUI
+            
+            # Get current balance for display only
             current_balance = 1000  # Default
             if hasattr(self, 'mt5_interface'):
                 account_info = self.mt5_interface.get_account_info()
                 if account_info:
                     current_balance = account_info.get('balance', 1000)
 
-            # Calculate percentage thresholds
-            profit_threshold_pct = 2.5  # 2.5% profit
-            loss_threshold_pct = 5.0    # 5% loss
-
-            profit_threshold = current_balance * (profit_threshold_pct / 100)
-            loss_threshold = current_balance * (loss_threshold_pct / 100)
-
             print(f"💰 Balance: ${current_balance:.2f}")
-            print(f"📊 Thresholds: Profit=${profit_threshold:.2f} ({profit_threshold_pct}%), Loss=${loss_threshold:.2f} ({loss_threshold_pct}%)")
+            print(f"📊 Thresholds: Profit=${profit_threshold:.2f}, Loss=${loss_threshold:.2f}")
 
-            # 1. Profit/Loss management (ใช้ % แทน)
+            # 1. Profit/Loss management (ใช้ USD ตรงๆ แทน %)
             if adjusted_pnl > profit_threshold:
-                print(f"💰 TAKE PROFIT: ${adjusted_pnl:.2f} > {profit_threshold_pct}% threshold")
+                print(f"💰 TAKE PROFIT: ${adjusted_pnl:.2f} > ${profit_threshold:.2f} threshold")
                 return 3.2
             if adjusted_pnl < -loss_threshold:
-                print(f"🚨 STOP LOSS: ${adjusted_pnl:.2f} < -{loss_threshold_pct}% threshold")
+                print(f"🚨 STOP LOSS: ${adjusted_pnl:.2f} < -${loss_threshold:.2f} threshold")
                 return 3.5
                 
             # 2. 🎯 PROFESSIONAL MULTI-TIMEFRAME ANALYSIS
@@ -1266,7 +1253,7 @@ class TradingEnvironment(gym.Env):
         except Exception as e:
             print(f"❌ Professional analysis error: {e}")
             return action_type
-
+    
     def update_position_state(self):
         """Update position state with RECOVERY CHECK - FIXED VERSION"""
         try:
@@ -2477,42 +2464,6 @@ class TradingEnvironment(gym.Env):
                 'recovery_active': False,
                 'recovery_level': 0
             }
-    def is_market_open(self):
-        """Check if XAUUSD market is open - REALISTIC VERSION"""
-        try:
-            import pytz
-            from datetime import datetime
-            
-            # Get current time in UTC
-            utc_now = datetime.now(pytz.UTC)
-            weekday = utc_now.weekday()  # 0=Monday, 6=Sunday
-            hour = utc_now.hour
-            
-            # XAUUSD trades 24/5 (Sunday 22:00 GMT - Friday 21:00 GMT)
-            
-            # Market closed periods:
-            if weekday == 4 and hour >= 21:  # Friday 21:00+ GMT
-                return False
-            elif weekday == 5:  # Saturday (all day)
-                return False  
-            elif weekday == 6 and hour < 22:  # Sunday before 22:00 GMT
-                return False
-                
-            # During training, always return True for faster learning
-            if self.config.get('training_mode', True):
-                return True
-                
-            # For live trading, also check news hours
-            if hour in [12, 13, 14, 20, 21]:  # News hours
-                minute = utc_now.minute
-                if 25 <= minute <= 35:  # 10-minute news break
-                    return False
-                    
-            return True
-            
-        except Exception as e:
-            print(f"Market hours check error: {e}")
-            return True  # Default to open if error
 
     def _is_episode_done(self):
         """Check if episode should end"""

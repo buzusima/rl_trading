@@ -293,32 +293,37 @@ class TradingGUI:
         # Profit Taking Parameters Frame
         profit_params = ttk.LabelFrame(self.config_frame, text="💰 Profit Taking Settings")
         profit_params.pack(fill='x', padx=10, pady=5)
-        
-        # Min Profit Target
-        tk.Label(profit_params, text="Min Profit Target (%):").grid(row=0, column=0, sticky='w', padx=5, pady=2)
-        self.min_profit_var = tk.DoubleVar(value=self.config.get('min_profit_pct', 2.5))
+
+        # Min Profit Target ($)
+        tk.Label(profit_params, text="Min Profit Target ($):").grid(row=0, column=0, sticky='w', padx=5, pady=2)
+        self.min_profit_var = tk.DoubleVar(value=self.config.get('min_profit_target', 10))
         tk.Entry(profit_params, textvariable=self.min_profit_var).grid(row=0, column=1, padx=5, pady=2)
-        
-        # Trailing Stop Distance
-        tk.Label(profit_params, text="Trailing Stop (%):").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        self.trailing_stop_var = tk.DoubleVar(value=self.config.get('trailing_stop_pct', 1.5))
+
+        # Trailing Stop ($)
+        tk.Label(profit_params, text="Trailing Stop ($):").grid(row=1, column=0, sticky='w', padx=5, pady=2)
+        self.trailing_stop_var = tk.DoubleVar(value=self.config.get('trailing_stop_distance', 5))
         tk.Entry(profit_params, textvariable=self.trailing_stop_var).grid(row=1, column=1, padx=5, pady=2)
-        
-        # Quick Profit Mode
+
+        # Max Loss Limit ($) - เพิ่มใหม่
+        tk.Label(profit_params, text="Max Loss Limit ($):").grid(row=2, column=0, sticky='w', padx=5, pady=2)
+        self.max_loss_var = tk.DoubleVar(value=self.config.get('max_loss_limit', 15))
+        tk.Entry(profit_params, textvariable=self.max_loss_var).grid(row=2, column=1, padx=5, pady=2)
+
+        # Quick Profit Mode - เปลี่ยน row เป็น 3
         self.quick_profit_var = tk.BooleanVar(value=self.config.get('quick_profit_mode', True))
         tk.Checkbutton(profit_params, text="⚡ Quick Profit Mode (เก็บกำไรเร็วขึ้น)", 
-                    variable=self.quick_profit_var).grid(row=2, column=0, columnspan=2, sticky='w', padx=5, pady=2)
-        
-        # Profit Mode Selection
-        tk.Label(profit_params, text="Profit Mode:").grid(row=3, column=0, sticky='w', padx=5, pady=2)
+                    variable=self.quick_profit_var).grid(row=3, column=0, columnspan=2, sticky='w', padx=5, pady=2)
+
+        # Profit Mode Selection - เปลี่ยน row เป็น 4
+        tk.Label(profit_params, text="Profit Mode:").grid(row=4, column=0, sticky='w', padx=5, pady=2)
         self.profit_mode_var = tk.StringVar(value=self.config.get('profit_mode', 'balanced'))
         profit_mode_combo = ttk.Combobox(profit_params, textvariable=self.profit_mode_var, 
                                     values=['conservative', 'balanced', 'aggressive', 'scalping'])
-        profit_mode_combo.grid(row=3, column=1, padx=5, pady=2)
-        
-        # Apply Profit Settings Button
+        profit_mode_combo.grid(row=4, column=1, padx=5, pady=2)
+
+        # Apply Profit Settings Button - เปลี่ยน row เป็น 5
         tk.Button(profit_params, text="✅ Apply Profit Settings", 
-                command=self.apply_profit_settings, bg='lightgreen').grid(row=4, column=0, columnspan=2, pady=5)
+        command=self.apply_profit_settings, bg='lightgreen').grid(row=5, column=0, columnspan=2, pady=5)
         
         # 🔍 AI Monitoring Frame - FIXED VERSION
         monitoring_frame = ttk.LabelFrame(self.config_frame, text="🔍 AI Intelligence Monitor")
@@ -538,41 +543,33 @@ class TradingGUI:
             return False
 
     def apply_profit_settings(self):
-        """Apply profit settings to recovery engine in real-time"""
         try:
-            if hasattr(self, 'recovery_engine') and self.recovery_engine:
-                new_settings = {
-                    'min_profit_target': self.min_profit_var.get(),
-                    'trailing_stop_distance': self.trailing_stop_var.get(),
-                    'quick_profit_mode': self.quick_profit_var.get(),
-                    'profit_mode': self.profit_mode_var.get()
-                }
+            new_settings = {
+                'min_profit_target': self.min_profit_var.get(),
+                'trailing_stop_distance': self.trailing_stop_var.get(),
+                'max_loss_limit': self.max_loss_var.get(),
+                'quick_profit_mode': self.quick_profit_var.get(),
+                'profit_mode': self.profit_mode_var.get()
+            }
+            
+            # ส่งไปยัง recovery_engine
+            if hasattr(self, 'recovery_engine'):
+                self.recovery_engine.update_profit_settings(new_settings)
+            
+            # ส่งไปยัง environment
+            if hasattr(self, 'trading_env'):
+                self.trading_env.update_profit_settings(new_settings)
                 
-                # เรียก method และเช็ค return value
-                success = self.recovery_engine.update_profit_settings(new_settings)
-                
-                if success:
-                    self.log_message(f"Profit settings applied: Target=${new_settings['min_profit_target']:.1f}, Quick={new_settings['quick_profit_mode']}")
-                    messagebox.showinfo("Success", f"Profit settings applied!\nTarget: ${new_settings['min_profit_target']:.1f}\nMode: {new_settings['profit_mode']}")
-                    
-                    # Update config ด้วย
-                    self.config.update(new_settings)
-                    
-                    # Update GUI display
-                    self.update_recovery_status()
-                    
-                else:
-                    self.log_message("Failed to apply profit settings")
-                    messagebox.showerror("Error", "Failed to apply profit settings")
-                    
-            else:
-                self.log_message("Recovery engine not initialized yet")
-                messagebox.showwarning("Warning", "Start trading first to apply profit settings")
-                
+            # อัพเดท config
+            self.config.update(new_settings)
+            
+            self.log_message(f"✅ Profit settings updated: Target=${new_settings['min_profit_target']}, Stop=${new_settings['trailing_stop_distance']}")
+            messagebox.showinfo("Success", f"Settings Applied!\nProfit Target: ${new_settings['min_profit_target']}\nTrailing Stop: ${new_settings['trailing_stop_distance']}")
+            
         except Exception as e:
-            self.log_message(f"Error applying profit settings: {str(e)}")
-            messagebox.showerror("Error", f"Error applying settings: {str(e)}")            
-    
+            self.log_message(f"❌ Error: {e}")
+            messagebox.showerror("Error", f"Failed: {e}")
+
     def update_recovery_status(self):
         """Update recovery status display with profit info"""
         try:
@@ -1466,13 +1463,14 @@ class TradingGUI:
                 'training_mode': True,
                 'auto_save_model': True,
                 
-                # Profit settings
-                'min_profit_target': 25,
-                'trailing_stop_distance': 15,
+                # 🆕 Profit settings เป็น USD
+                'min_profit_target': 10,     # $10
+                'trailing_stop_distance': 5, # $5
+                'max_loss_limit': 15,        # $15
                 'quick_profit_mode': True,
                 'profit_mode': 'balanced'
-            }            
-    
+            }
+          
     def load_config_dialog(self):
         """Load configuration from file dialog"""
         filename = filedialog.askopenfilename(

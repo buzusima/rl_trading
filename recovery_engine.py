@@ -963,17 +963,21 @@ class RecoveryEngine:
     def update_profit_settings(self, new_settings):
         """Update profit settings in real-time"""
         try:
-            # Update profit manager settings
+            # Update profit manager
             if hasattr(self, 'profit_manager'):
-                self.profit_manager.min_profit_target = new_settings.get('min_profit_target', 25)
-                self.profit_manager.trailing_stop_distance = new_settings.get('trailing_stop_distance', 15)
+                self.profit_manager.min_profit_target = new_settings.get('min_profit_target', 10)
+                self.profit_manager.trailing_stop_distance = new_settings.get('trailing_stop_distance', 5)
                 self.profit_manager.config.update(new_settings)
                 
-            print(f"Profit settings updated: {new_settings}")
+            # Update own config
+            self.config.update(new_settings)
+            
+            print(f"💰 Profit settings updated: {new_settings}")
             return True
+            
         except Exception as e:
-            print(f"Error updating profit settings: {e}")
-            return False
+            print(f"❌ Error updating settings: {e}")
+            return False    
     
     def reset(self):
         """

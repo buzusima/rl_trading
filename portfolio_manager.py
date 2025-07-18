@@ -1375,3 +1375,608 @@ class ProfessionalPortfolioManager:
         except Exception as e:
             print(f"Portfolio profit evaluation error: {e}")
             return {'type': 'PORTFOLIO', 'action': 'HOLD', 'reason': 'Evaluation error'}
+    
+    def execute_portfolio_management(self, action_vector: np.ndarray, 
+                                   market_data: Dict, mt5_interface) -> Dict:
+        """Execute comprehensive portfolio management with 15-dimensional actions"""
+        try:
+            print(f"📊 === EXECUTING PORTFOLIO MANAGEMENT ===")
+            
+            # Parse 15-dimensional action vector
+            parsed_actions = self._parse_portfolio_actions(action_vector)
+            
+            # Update portfolio status
+            self.update_portfolio_status(mt5_interface)
+            
+            # Get current positions
+            positions = mt5_interface.get_positions()
+            
+            # Calculate portfolio metrics
+            portfolio_metrics = self._calculate_portfolio_metrics(positions, market_data)
+            
+            # Execute portfolio decisions
+            execution_result = {
+                'success': False,
+                'portfolio_actions': [],
+                'position_actions': [],
+                'risk_actions': [],
+                'new_positions': [],
+                'modified_positions': [],
+                'closed_positions': [],
+                'portfolio_metrics': portfolio_metrics,
+                'execution_summary': {}
+            }
+            
+            # 1. Portfolio-level profit taking
+            profit_decision = self.evaluate_portfolio_profit_taking(positions, portfolio_metrics.get('total_pnl', 0))
+            if profit_decision['action'] != 'HOLD':
+                profit_result = self._execute_profit_decision(profit_decision, positions, mt5_interface)
+                execution_result['portfolio_actions'].append(profit_result)
+            
+            # 2. Risk management actions
+            risk_decision = self.evaluate_portfolio_risk(positions, portfolio_metrics)
+            if risk_decision['action'] != 'HOLD':
+                risk_result = self._execute_risk_decision(risk_decision, positions, mt5_interface)
+                execution_result['risk_actions'].append(risk_result)
+            
+            # 3. Position-level management
+            for position in positions:
+                pos_decision = self.evaluate_position_management(position, market_data)
+                if pos_decision['action'] != 'HOLD':
+                    pos_result = self._execute_position_decision(pos_decision, position, mt5_interface)
+                    execution_result['position_actions'].append(pos_result)
+            
+            # 4. New position opportunities (if conditions allow)
+            if self._can_open_new_positions(parsed_actions, portfolio_metrics):
+                new_pos_result = self._evaluate_new_positions(parsed_actions, market_data, mt5_interface)
+                if new_pos_result['recommended']:
+                    execution_result['new_positions'].extend(new_pos_result['positions'])
+            
+            # 5. Portfolio rebalancing
+            if parsed_actions.get('rebalance_trigger', 0) > 0.7:
+                rebalance_result = self._execute_portfolio_rebalancing(positions, market_data, mt5_interface)
+                execution_result['portfolio_actions'].append(rebalance_result)
+            
+            # Update execution summary
+            execution_result['execution_summary'] = {
+                'total_actions': len(execution_result['portfolio_actions']) + len(execution_result['position_actions']),
+                'portfolio_heat': portfolio_metrics.get('portfolio_heat', 0),
+                'risk_level': self._calculate_risk_level(portfolio_metrics),
+                'efficiency_score': self._calculate_efficiency_score(execution_result),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            execution_result['success'] = True
+            
+            print(f"✅ Portfolio management executed successfully")
+            print(f"   Total Actions: {execution_result['execution_summary']['total_actions']}")
+            print(f"   Portfolio Heat: {portfolio_metrics.get('portfolio_heat', 0):.1f}%")
+            
+            return execution_result
+            
+        except Exception as e:
+            print(f"❌ Portfolio management execution error: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'portfolio_actions': [],
+                'position_actions': []
+            }
+    
+    def _parse_portfolio_actions(self, action_vector):
+        """Parse 15-dimensional action vector for portfolio management"""
+        try:
+            actions = {}
+            
+            # Map action vector to portfolio parameters
+            actions['market_direction'] = np.clip(action_vector[0], -1, 1)
+            actions['position_size'] = np.clip(action_vector[1], 0.01, 1.0)
+            actions['entry_aggression'] = np.clip(action_vector[2], 0, 1)
+            actions['profit_target_ratio'] = np.clip(action_vector[3], 0.5, 5.0)
+            actions['partial_take_levels'] = int(np.clip(action_vector[4], 0, 3))
+            actions['add_position_signal'] = np.clip(action_vector[5], 0, 1)
+            actions['hedge_ratio'] = np.clip(action_vector[6], 0, 1)
+            actions['recovery_mode'] = int(np.clip(action_vector[7], 0, 3))
+            actions['correlation_limit'] = np.clip(action_vector[8], 0, 1)
+            actions['volatility_filter'] = np.clip(action_vector[9], 0, 1)
+            actions['spread_tolerance'] = np.clip(action_vector[10], 0, 1)
+            actions['time_filter'] = np.clip(action_vector[11], 0, 1)
+            actions['portfolio_heat_limit'] = np.clip(action_vector[12], 0, 1)
+            actions['smart_exit_signal'] = np.clip(action_vector[13], 0, 1)
+            actions['rebalance_trigger'] = np.clip(action_vector[14], 0, 1)
+            
+            return actions
+            
+        except Exception as e:
+            print(f"Action parsing error: {e}")
+            return {}
+    
+    def _execute_profit_decision(self, profit_decision, positions, mt5_interface):
+        """Execute profit-taking decision"""
+        try:
+            result = {
+                'action': profit_decision['action'],
+                'positions_affected': 0,
+                'total_profit_realized': 0.0,
+                'execution_details': []
+            }
+            
+            if profit_decision['action'] == 'CLOSE_ALL':
+                for position in positions:
+                    close_result = mt5_interface.close_position(position['ticket'])
+                    if close_result['success']:
+                        result['positions_affected'] += 1
+                        result['total_profit_realized'] += position.get('profit', 0)
+                        result['execution_details'].append({
+                            'ticket': position['ticket'],
+                            'profit': position.get('profit', 0),
+                            'action': 'CLOSED'
+                        })
+            
+            elif profit_decision['action'] == 'CLOSE_PROFITABLE':
+                for position in positions:
+                    if position.get('profit', 0) > 0:
+                        close_result = mt5_interface.close_position(position['ticket'])
+                        if close_result['success']:
+                            result['positions_affected'] += 1
+                            result['total_profit_realized'] += position.get('profit', 0)
+                            result['execution_details'].append({
+                                'ticket': position['ticket'],
+                                'profit': position.get('profit', 0),
+                                'action': 'CLOSED'
+                            })
+            
+            return result
+            
+        except Exception as e:
+            print(f"Profit decision execution error: {e}")
+            return {'action': 'ERROR', 'error': str(e)}
+    
+    def _execute_risk_decision(self, risk_decision, positions, mt5_interface):
+        """Execute risk management decision"""
+        try:
+            result = {
+                'action': risk_decision['action'],
+                'positions_affected': 0,
+                'risk_reduction': 0.0,
+                'execution_details': []
+            }
+            
+            if risk_decision['action'] == 'EMERGENCY_CLOSE':
+                # Close all positions immediately
+                for position in positions:
+                    close_result = mt5_interface.close_position(position['ticket'])
+                    if close_result['success']:
+                        result['positions_affected'] += 1
+                        result['execution_details'].append({
+                            'ticket': position['ticket'],
+                            'action': 'EMERGENCY_CLOSED'
+                        })
+            
+            elif risk_decision['action'] == 'REDUCE_EXPOSURE':
+                # Close largest losing positions
+                losing_positions = [pos for pos in positions if pos.get('profit', 0) < 0]
+                losing_positions.sort(key=lambda x: x.get('profit', 0))  # Sort by largest loss
+                
+                positions_to_close = losing_positions[:len(losing_positions)//2]  # Close half
+                
+                for position in positions_to_close:
+                    close_result = mt5_interface.close_position(position['ticket'])
+                    if close_result['success']:
+                        result['positions_affected'] += 1
+                        result['risk_reduction'] += abs(position.get('profit', 0))
+                        result['execution_details'].append({
+                            'ticket': position['ticket'],
+                            'profit': position.get('profit', 0),
+                            'action': 'RISK_REDUCED'
+                        })
+            
+            return result
+            
+        except Exception as e:
+            print(f"Risk decision execution error: {e}")
+            return {'action': 'ERROR', 'error': str(e)}
+    
+    def _execute_position_decision(self, pos_decision, position, mt5_interface):
+        """Execute position-level decision"""
+        try:
+            result = {
+                'ticket': position['ticket'],
+                'action': pos_decision['action'],
+                'success': False,
+                'details': {}
+            }
+            
+            if pos_decision['action'] == 'CLOSE':
+                close_result = mt5_interface.close_position(position['ticket'])
+                result['success'] = close_result['success']
+                result['details'] = close_result
+            
+            elif pos_decision['action'] == 'MODIFY_SL':
+                new_sl = pos_decision.get('new_sl', 0)
+                modify_result = mt5_interface.modify_position(position['ticket'], sl=new_sl)
+                result['success'] = modify_result['success']
+                result['details'] = modify_result
+            
+            elif pos_decision['action'] == 'MODIFY_TP':
+                new_tp = pos_decision.get('new_tp', 0)
+                modify_result = mt5_interface.modify_position(position['ticket'], tp=new_tp)
+                result['success'] = modify_result['success']
+                result['details'] = modify_result
+            
+            elif pos_decision['action'] == 'PARTIAL_CLOSE':
+                partial_volume = pos_decision.get('partial_volume', position['volume'] * 0.5)
+                partial_result = mt5_interface.partial_close_position(position['ticket'], partial_volume)
+                result['success'] = partial_result['success']
+                result['details'] = partial_result
+            
+            return result
+            
+        except Exception as e:
+            print(f"Position decision execution error: {e}")
+            return {'action': 'ERROR', 'error': str(e)}
+    
+    def _can_open_new_positions(self, parsed_actions, portfolio_metrics):
+        """Check if new positions can be opened"""
+        try:
+            # Check portfolio heat
+            if portfolio_metrics.get('portfolio_heat', 0) > 15.0:
+                return False
+            
+            # Check drawdown
+            if portfolio_metrics.get('current_drawdown', 0) > 8.0:
+                return False
+            
+            # Check position count
+            if portfolio_metrics.get('position_count', 0) >= 10:
+                return False
+            
+            # Check action signals
+            if parsed_actions.get('add_position_signal', 0) < 0.5:
+                return False
+            
+            return True
+            
+        except:
+            return False
+    
+    def _evaluate_new_positions(self, parsed_actions, market_data, mt5_interface):
+        """Evaluate new position opportunities"""
+        try:
+            result = {
+                'recommended': False,
+                'positions': [],
+                'analysis': {}
+            }
+            
+            # Get current market conditions
+            current_price = market_data.get('current_price', 0)
+            spread = market_data.get('spread', 0)
+            volatility = market_data.get('atr', 0)
+            
+            # Check spread tolerance
+            if spread > parsed_actions.get('spread_tolerance', 0.5) * 50:  # Max 50 points spread
+                return result
+            
+            # Check volatility filter
+            if volatility < parsed_actions.get('volatility_filter', 0.3) * 10:  # Min volatility
+                return result
+            
+            # Calculate position size
+            base_lot_size = 0.01
+            size_multiplier = parsed_actions.get('position_size', 0.1)
+            lot_size = base_lot_size * size_multiplier * 10  # Max 0.1 lot
+            
+            # Determine direction
+            market_direction = parsed_actions.get('market_direction', 0)
+            
+            if market_direction > 0.2:  # Buy signal
+                result['positions'].append({
+                    'type': 'BUY',
+                    'volume': lot_size,
+                    'price': current_price,
+                    'sl': current_price - volatility * 2,
+                    'tp': current_price + volatility * parsed_actions.get('profit_target_ratio', 2.0),
+                    'comment': 'Portfolio_Manager_Buy'
+                })
+                result['recommended'] = True
+            
+            elif market_direction < -0.2:  # Sell signal
+                result['positions'].append({
+                    'type': 'SELL',
+                    'volume': lot_size,
+                    'price': current_price,
+                    'sl': current_price + volatility * 2,
+                    'tp': current_price - volatility * parsed_actions.get('profit_target_ratio', 2.0),
+                    'comment': 'Portfolio_Manager_Sell'
+                })
+                result['recommended'] = True
+            
+            return result
+            
+        except Exception as e:
+            print(f"New position evaluation error: {e}")
+            return {'recommended': False, 'positions': []}
+    
+    def _execute_portfolio_rebalancing(self, positions, market_data, mt5_interface):
+        """Execute portfolio rebalancing"""
+        try:
+            result = {
+                'action': 'REBALANCE',
+                'positions_modified': 0,
+                'rebalance_details': []
+            }
+            
+            if not positions:
+                return result
+            
+            # Calculate total exposure
+            total_buy_volume = sum(pos.get('volume', 0) for pos in positions if pos.get('type', 0) == 0)
+            total_sell_volume = sum(pos.get('volume', 0) for pos in positions if pos.get('type', 0) == 1)
+            
+            # Check if rebalancing is needed
+            volume_imbalance = abs(total_buy_volume - total_sell_volume)
+            total_volume = total_buy_volume + total_sell_volume
+            
+            if total_volume > 0:
+                imbalance_ratio = volume_imbalance / total_volume
+                
+                if imbalance_ratio > 0.3:  # 30% imbalance threshold
+                    # Rebalance by closing some positions from the dominant side
+                    if total_buy_volume > total_sell_volume:
+                        # Close some buy positions
+                        buy_positions = [pos for pos in positions if pos.get('type', 0) == 0]
+                        buy_positions.sort(key=lambda x: x.get('profit', 0), reverse=True)  # Close most profitable first
+                        
+                        positions_to_close = buy_positions[:len(buy_positions)//3]  # Close 1/3
+                        
+                        for position in positions_to_close:
+                            close_result = mt5_interface.close_position(position['ticket'])
+                            if close_result['success']:
+                                result['positions_modified'] += 1
+                                result['rebalance_details'].append({
+                                    'ticket': position['ticket'],
+                                    'action': 'CLOSED_FOR_REBALANCE',
+                                    'type': 'BUY'
+                                })
+                    else:
+                        # Close some sell positions
+                        sell_positions = [pos for pos in positions if pos.get('type', 0) == 1]
+                        sell_positions.sort(key=lambda x: x.get('profit', 0), reverse=True)  # Close most profitable first
+                        
+                        positions_to_close = sell_positions[:len(sell_positions)//3]  # Close 1/3
+                        
+                        for position in positions_to_close:
+                            close_result = mt5_interface.close_position(position['ticket'])
+                            if close_result['success']:
+                                result['positions_modified'] += 1
+                                result['rebalance_details'].append({
+                                    'ticket': position['ticket'],
+                                    'action': 'CLOSED_FOR_REBALANCE',
+                                    'type': 'SELL'
+                                })
+            
+            return result
+            
+        except Exception as e:
+            print(f"Portfolio rebalancing error: {e}")
+            return {'action': 'ERROR', 'error': str(e)}
+    
+    def _calculate_risk_level(self, portfolio_metrics):
+        """Calculate overall portfolio risk level"""
+        try:
+            risk_factors = []
+            
+            # Portfolio heat risk
+            portfolio_heat = portfolio_metrics.get('portfolio_heat', 0)
+            heat_risk = min(portfolio_heat / 20.0, 1.0)  # Max at 20%
+            risk_factors.append(heat_risk)
+            
+            # Drawdown risk
+            drawdown = portfolio_metrics.get('current_drawdown', 0)
+            drawdown_risk = min(drawdown / 10.0, 1.0)  # Max at 10%
+            risk_factors.append(drawdown_risk)
+            
+            # Position count risk
+            position_count = portfolio_metrics.get('position_count', 0)
+            count_risk = min(position_count / 15.0, 1.0)  # Max at 15 positions
+            risk_factors.append(count_risk)
+            
+            # Correlation risk
+            correlation = portfolio_metrics.get('position_correlation', 0)
+            correlation_risk = correlation  # Already 0-1
+            risk_factors.append(correlation_risk)
+            
+            # Calculate weighted average
+            weights = [0.3, 0.3, 0.2, 0.2]  # Portfolio heat and drawdown most important
+            overall_risk = sum(risk * weight for risk, weight in zip(risk_factors, weights))
+            
+            return min(overall_risk, 1.0)
+            
+        except:
+            return 0.5  # Default moderate risk
+    
+    def _calculate_efficiency_score(self, execution_result):
+        """Calculate portfolio management efficiency score"""
+        try:
+            total_actions = execution_result['execution_summary']['total_actions']
+            successful_actions = sum(1 for action in execution_result['portfolio_actions'] 
+                                   if action.get('success', False))
+            
+            if total_actions == 0:
+                return 1.0
+            
+            efficiency = successful_actions / total_actions
+            return efficiency
+            
+        except:
+            return 0.5
+    
+    def generate_portfolio_report(self) -> str:
+        """Generate comprehensive portfolio management report"""
+        try:
+            report = "="*80 + "\n"
+            report += "📊 PROFESSIONAL PORTFOLIO MANAGEMENT REPORT\n"
+            report += "="*80 + "\n\n"
+            
+            # Portfolio Status
+            report += f"📈 PORTFOLIO STATUS:\n"
+            report += f"   Current Mode: {self.current_mode.value}\n"
+            report += f"   Portfolio Heat: {self.portfolio_heat:.1f}%\n"
+            report += f"   Current Drawdown: {self.current_drawdown:.1f}%\n"
+            report += f"   Peak Equity: ${self.peak_equity:.2f}\n"
+            report += f"   Position Count: {self.position_count}\n"
+            report += f"   Total Volume: {self.total_volume:.2f} lots\n"
+            report += f"   Position Correlation: {self.position_correlation:.2f}\n"
+            
+            # Dynamic Thresholds
+            report += f"\n🎯 DYNAMIC THRESHOLDS:\n"
+            for key, value in self.dynamic_thresholds.items():
+                report += f"   {key.replace('_', ' ').title()}: ${value:.2f}\n"
+            
+            # Market Regime Analysis
+            report += f"\n🌍 MARKET ANALYSIS:\n"
+            report += f"   Current Regime: {self.market_regime.value}\n"
+            report += f"   Trend Strength: {self.trend_strength:.2f}\n"
+            report += f"   Volatility Level: {self.volatility_regime.value}\n"
+            
+            # Performance Metrics
+            report += f"\n📊 PERFORMANCE METRICS:\n"
+            report += f"   Win Rate: {self.win_rate:.1%}\n"
+            report += f"   Avg Trade Duration: {self.avg_trade_duration:.1f} hours\n"
+            report += f"   Risk-Adjusted Return: {self.risk_adjusted_return:.2f}\n"
+            report += f"   Sharpe Ratio: {self.sharpe_ratio:.2f}\n"
+            report += f"   Max Favorable Excursion: {self.max_favorable_excursion:.1f}%\n"
+            
+            # Mode Performance
+            report += f"\n🎛️ MODE PERFORMANCE:\n"
+            for mode, performance in self.mode_performance.items():
+                report += f"   {mode}: {performance.get('win_rate', 0):.1%} win rate, "
+                report += f"Avg PnL: ${performance.get('avg_pnl', 0):.2f}\n"
+            
+            # Recent Actions
+            report += f"\n⚡ RECENT ACTIONS:\n"
+            recent_actions = list(self.action_history)[-5:]  # Last 5 actions
+            for i, action in enumerate(recent_actions, 1):
+                timestamp = action.get('timestamp', 'Unknown')
+                action_type = action.get('action', 'Unknown')
+                report += f"   {i}. [{timestamp}]: {action_type}\n"
+            
+            # Risk Management
+            report += f"\n🛡️ RISK MANAGEMENT:\n"
+            report += f"   Portfolio Heat Limit: {self.portfolio_heat_limit:.1f}%\n"
+            report += f"   Max Drawdown Limit: {self.max_drawdown_limit:.1f}%\n"
+            report += f"   Position Size Limit: {self.position_size_limit:.2f} lots\n"
+            report += f"   Correlation Limit: {self.correlation_limit:.2f}\n"
+            
+            # System Configuration
+            report += f"\n⚙️ SYSTEM CONFIGURATION:\n"
+            report += f"   Auto Position Management: {'✅' if self.auto_position_management else '❌'}\n"
+            report += f"   Dynamic Sizing: {'✅' if self.dynamic_sizing else '❌'}\n"
+            report += f"   Advanced Analytics: {'✅' if self.advanced_analytics else '❌'}\n"
+            report += f"   ML Profit Optimization: {'✅' if self.ml_profit_optimization else '❌'}\n"
+            report += f"   Multi-Timeframe Analysis: {'✅' if self.multi_timeframe_analysis else '❌'}\n"
+            
+            report += "\n" + "="*80
+            
+            return report
+            
+        except Exception as e:
+            return f"Portfolio report generation error: {e}"
+    
+    def save_portfolio_state(self, filepath: str = None):
+        """Save current portfolio state to file"""
+        try:
+            if filepath is None:
+                filepath = f"portfolio_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            
+            portfolio_state = {
+                'timestamp': datetime.now().isoformat(),
+                'current_mode': self.current_mode.value,
+                'portfolio_heat': self.portfolio_heat,
+                'current_drawdown': self.current_drawdown,
+                'peak_equity': self.peak_equity,
+                'position_count': self.position_count,
+                'total_volume': self.total_volume,
+                'position_correlation': self.position_correlation,
+                'dynamic_thresholds': self.dynamic_thresholds,
+                'market_regime': self.market_regime.value,
+                'trend_strength': self.trend_strength,
+                'volatility_regime': self.volatility_regime.value,
+                'performance_metrics': {
+                    'win_rate': self.win_rate,
+                    'avg_trade_duration': self.avg_trade_duration,
+                    'risk_adjusted_return': self.risk_adjusted_return,
+                    'sharpe_ratio': self.sharpe_ratio,
+                    'max_favorable_excursion': self.max_favorable_excursion
+                },
+                'mode_performance': self.mode_performance,
+                'action_history': list(self.action_history)
+            }
+            
+            with open(filepath, 'w') as f:
+                json.dump(portfolio_state, f, indent=2)
+            
+            print(f"✅ Portfolio state saved to: {filepath}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error saving portfolio state: {e}")
+            return False
+    
+    def load_portfolio_state(self, filepath: str):
+        """Load portfolio state from file"""
+        try:
+            with open(filepath, 'r') as f:
+                portfolio_state = json.load(f)
+            
+            # Restore state
+            self.current_mode = PortfolioMode(portfolio_state.get('current_mode', 'BALANCED'))
+            self.portfolio_heat = portfolio_state.get('portfolio_heat', 0.0)
+            self.current_drawdown = portfolio_state.get('current_drawdown', 0.0)
+            self.peak_equity = portfolio_state.get('peak_equity', 0.0)
+            self.position_count = portfolio_state.get('position_count', 0)
+            self.total_volume = portfolio_state.get('total_volume', 0.0)
+            self.position_correlation = portfolio_state.get('position_correlation', 0.0)
+            self.dynamic_thresholds = portfolio_state.get('dynamic_thresholds', {})
+            self.market_regime = MarketRegime(portfolio_state.get('market_regime', 'SIDEWAYS'))
+            self.trend_strength = portfolio_state.get('trend_strength', 0.0)
+            self.volatility_regime = VolatilityRegime(portfolio_state.get('volatility_regime', 'NORMAL'))
+            
+            # Restore performance metrics
+            performance_metrics = portfolio_state.get('performance_metrics', {})
+            self.win_rate = performance_metrics.get('win_rate', 0.0)
+            self.avg_trade_duration = performance_metrics.get('avg_trade_duration', 0.0)
+            self.risk_adjusted_return = performance_metrics.get('risk_adjusted_return', 0.0)
+            self.sharpe_ratio = performance_metrics.get('sharpe_ratio', 0.0)
+            self.max_favorable_excursion = performance_metrics.get('max_favorable_excursion', 0.0)
+            
+            # Restore mode performance
+            self.mode_performance = portfolio_state.get('mode_performance', {})
+            
+            # Restore action history
+            action_history = portfolio_state.get('action_history', [])
+            self.action_history = deque(action_history, maxlen=1000)
+            
+            print(f"✅ Portfolio state loaded from: {filepath}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error loading portfolio state: {e}")
+            return False
+
+
+# ========================= FACTORY FUNCTIONS & EXPORTS =========================
+
+def create_ai_portfolio_manager(config=None):
+    """Factory function to create AI portfolio manager"""
+    return AIPortfolioManager(config)
+
+# Export main classes
+__all__ = [
+    'AIPortfolioManager',
+    'PortfolioMode',
+    'MarketRegime', 
+    'VolatilityRegime',
+    'create_ai_portfolio_manager'
+]

@@ -1,76 +1,89 @@
+# core/mt5_connector.py - Complete MT5 Interface
 import MetaTrader5 as mt5
-from typing import Dict
 import time
+from typing import Dict, List, Optional
+from datetime import datetime
 
 class MT5Connector:
+    """
+    Complete MT5 Interface for Trading
+    - Connection management
+    - Trading operations
+    - Market data
+    - Order management
+    """
+    
     def __init__(self, config: Dict = None):
-            self.config = config or {}
-            self.is_connected = False
-            self.account_info = None
-            self.symbol_info_cache = {}
-            self.last_error = None
-            
-            # Trading parameters
-            self.magic_number = self.config.get('magic_number', 12345)
-            self.slippage = self.config.get('slippage', 3)
-            self.default_timeout = self.config.get('order_timeout', 10000)  # milliseconds
-            
-            # Rate limiting
-            self.last_request_time = 0
-            self.min_request_interval = 0.1  # seconds between requests
+        self.config = config or {}
+        self.is_connected = False
+        self.account_info = None
+        self.last_error = None
+        
+        # Trading parameters
+        self.magic_number = self.config.get('magic_number', 12345)
+        self.slippage = self.config.get('slippage', 3)
+        
+        # Rate limiting
+        self.last_request_time = 0
+        self.min_request_interval = 0.1  # seconds between requests
+        
+        print("🔗 MT5Connector initialized")
 
     def connect(self, login: int = None, password: str = None, server: str = None):
+        """Connect to MetaTrader 5"""
         try:
             # Initialize MT5
             if not mt5.initialize():
                 self.last_error = "Failed to initialize MT5"
+                print("❌ MT5 initialization failed")
                 return False
                 
             # Login if credentials provided
             if login and password and server:
                 if not mt5.login(login, password, server):
                     self.last_error = f"Failed to login: {mt5.last_error()}"
+                    print(f"❌ MT5 login failed: {self.last_error}")
                     return False
                     
             # Check connection
             account_info = mt5.account_info()
             if account_info is None:
                 self.last_error = "Failed to get account info"
+                print("❌ Cannot get account info")
                 return False
                 
             self.account_info = account_info._asdict()
             self.is_connected = True
             
-            print(f"Connected to MT5 - Account: {self.account_info.get('login', 'Unknown')}")
-            print(f"Server: {self.account_info.get('server', 'Unknown')}")
-            print(f"Balance: ${self.account_info.get('balance', 0):.2f}")
+            print(f"✅ Connected to MT5")
+            print(f"   Account: {self.account_info.get('login', 'Unknown')}")
+            print(f"   Server: {self.account_info.get('server', 'Unknown')}")
+            print(f"   Balance: ${self.account_info.get('balance', 0):.2f}")
             
             return True
             
         except Exception as e:
             self.last_error = f"Connection error: {str(e)}"
+            print(f"❌ MT5 connection error: {e}")
             return False
-        
+
     def disconnect(self):
-        """
-        Disconnect from MetaTrader 5
-        """
+        """Disconnect from MetaTrader 5"""
         try:
             mt5.shutdown()
             self.is_connected = False
-            print("Disconnected from MT5")
+            print("✅ Disconnected from MT5")
         except Exception as e:
-            print(f"Disconnect error: {str(e)}")
+            print(f"❌ Disconnect error: {e}")
 
     def get_account_info(self):
-        """
-        Get current account information
-        """
+        """Get current account information"""
         try:
             self._rate_limit()
             
             account_info = mt5.account_info()
             if account_info is None:
+                self.last_error = "Failed to get account info"
                 return None
                 
             self.account_info = account_info._asdict()
@@ -78,17 +91,17 @@ class MT5Connector:
             
         except Exception as e:
             self.last_error = f"Error getting account info: {str(e)}"
+            print(f"❌ Account info error: {e}")
             return None
-        
+
     def get_current_price(self, symbol: str):
-        """
-        Get current bid/ask prices for symbol
-        """
+        """Get current bid/ask prices for symbol"""
         try:
             self._rate_limit()
             
             tick = mt5.symbol_info_tick(symbol)
             if tick is None:
+                self.last_error = f"Failed to get price for {symbol}"
                 return None
                 
             return {
@@ -100,9 +113,11 @@ class MT5Connector:
             
         except Exception as e:
             self.last_error = f"Error getting current price: {str(e)}"
+            print(f"❌ Price error for {symbol}: {e}")
             return None
-        
+
     def get_positions(self, symbol: str = None):
+        """Get current positions"""
         try:
             self._rate_limit()
             
@@ -118,46 +133,137 @@ class MT5Connector:
             
         except Exception as e:
             self.last_error = f"Error getting positions: {str(e)}"
+            print(f"❌ Positions error: {e}")
             return []
-        
-    def _place_order_with_fallback(self, symbol: str, order_type: str, volume: float, 
-                                 price: float = None, sl: float = None, tp: float = None,
-                                 comment: str = "RL Trading", magic: int = None):
-        # Get supported filling modes
-        supported_modes = self.test_order_filling_modes(symbol)
-        
-        # Priority order for filling modes
-        filling_priority = ['FOK', 'IOC', 'RETURN']
-        
-        # Try each supported mode in priority order
-        for mode_name in filling_priority:
-            if mode_name in supported_modes:
-                if mode_name == 'FOK':
-                    filling_mode = mt5.ORDER_FILLING_FOK
-                elif mode_name == 'IOC':
-                    filling_mode = mt5.ORDER_FILLING_IOC
-                else:
-                    filling_mode = mt5.ORDER_FILLING_RETURN
-                    
-                success = self._execute_order(symbol, order_type, volume, price, 
-                                            sl, tp, comment, magic, filling_mode)
+
+    def get_symbol_info(self, symbol: str):
+        """Get symbol information"""
+        try:
+            self._rate_limit()
+            
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is None:
+                self.last_error = f"Failed to get symbol info for {symbol}"
+                return None
                 
-                if success:
-                    print(f"Order placed successfully with {mode_name} filling mode")
-                    return True
-                else:
-                    print(f"Order failed with {mode_name}, trying next mode...")
-                    
-        print("All filling modes failed")
-        return False
-   
+            return symbol_info._asdict()
+            
+        except Exception as e:
+            self.last_error = f"Error getting symbol info: {str(e)}"
+            print(f"❌ Symbol info error for {symbol}: {e}")
+            return None
+
+    def test_order_filling_modes(self, symbol: str):
+        """Test supported order filling modes for symbol"""
+        try:
+            symbol_info = self.get_symbol_info(symbol)
+            if not symbol_info:
+                return ['IOC']  # Default fallback
+                
+            filling_mode = symbol_info.get('filling_mode', 0)
+            supported_modes = []
+            
+            # Check which filling modes are supported
+            if filling_mode & 1:  # SYMBOL_FILLING_FOK
+                supported_modes.append('FOK')
+            if filling_mode & 2:  # SYMBOL_FILLING_IOC
+                supported_modes.append('IOC')
+            if filling_mode & 4:  # SYMBOL_FILLING_RETURN
+                supported_modes.append('RETURN')
+                
+            return supported_modes if supported_modes else ['IOC']
+            
+        except Exception as e:
+            print(f"Error testing filling modes: {e}")
+            return ['IOC']  # Safe fallback
+
+    def _get_filling_mode(self, symbol: str):
+        """Get best filling mode for symbol"""
+        try:
+            symbol_info = self.get_symbol_info(symbol)
+            if not symbol_info:
+                return mt5.ORDER_FILLING_IOC
+                
+            filling_mode = symbol_info.get('filling_mode', 0)
+            
+            # Priority: FOK -> IOC -> RETURN
+            if filling_mode & 1:  # SYMBOL_FILLING_FOK
+                return mt5.ORDER_FILLING_FOK
+            elif filling_mode & 2:  # SYMBOL_FILLING_IOC
+                return mt5.ORDER_FILLING_IOC
+            else:  # SYMBOL_FILLING_RETURN
+                return mt5.ORDER_FILLING_RETURN
+                
+        except Exception as e:
+            print(f"Error getting filling mode: {e}")
+            return mt5.ORDER_FILLING_IOC
+
     def place_order(self, symbol: str, order_type: str, volume: float, 
                    price: float = None, sl: float = None, tp: float = None,
-                   comment: str = "RL Trading", magic: int = None):
-        return self._place_order_with_fallback(symbol, order_type, volume, 
-                                            price, sl, tp, comment, magic)
-    
+                   comment: str = "AI Trading"):
+        """Place trading order"""
+        try:
+            self._rate_limit()
+            
+            # Get current price if not provided
+            if price is None:
+                current_price = self.get_current_price(symbol)
+                if not current_price:
+                    return False
+                price = current_price['ask'] if order_type.lower() == 'buy' else current_price['bid']
+            
+            # Determine MT5 order type
+            if order_type.lower() == 'buy':
+                mt5_order_type = mt5.ORDER_TYPE_BUY
+            elif order_type.lower() == 'sell':
+                mt5_order_type = mt5.ORDER_TYPE_SELL
+            else:
+                self.last_error = f"Invalid order type: {order_type}"
+                return False
+            
+            # Get filling mode
+            filling_mode = self._get_filling_mode(symbol)
+            
+            # Prepare order request
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": volume,
+                "type": mt5_order_type,
+                "price": price,
+                "deviation": self.slippage,
+                "magic": self.magic_number,
+                "comment": comment,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": filling_mode,
+            }
+            
+            # Add SL/TP if provided
+            if sl is not None:
+                request["sl"] = sl
+            if tp is not None:
+                request["tp"] = tp
+            
+            # Send order
+            result = mt5.order_send(request)
+            
+            if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                print(f"✅ {order_type.upper()} order placed: {symbol} {volume} lots")
+                return True
+            else:
+                error_code = result.retcode if result else "No result"
+                error_comment = result.comment if result else "Unknown error"
+                self.last_error = f"Order failed: {error_code} - {error_comment}"
+                print(f"❌ Order failed: {self.last_error}")
+                return False
+                
+        except Exception as e:
+            self.last_error = f"Error placing order: {str(e)}"
+            print(f"❌ Order error: {e}")
+            return False
+
     def close_position(self, position_ticket: int):
+        """Close specific position"""
         try:
             self._rate_limit()
             
@@ -185,21 +291,21 @@ class MT5Connector:
             # Determine close order type and price
             if pos_type == mt5.POSITION_TYPE_BUY:
                 order_type = mt5.ORDER_TYPE_SELL
-                tick = mt5.symbol_info_tick(symbol)
-                if not tick:
+                current_price = self.get_current_price(symbol)
+                if not current_price:
                     print(f"❌ Cannot get tick for {symbol}")
                     return False
-                price = tick.bid
+                price = current_price['bid']
             else:
                 order_type = mt5.ORDER_TYPE_BUY
-                tick = mt5.symbol_info_tick(symbol)
-                if not tick:
+                current_price = self.get_current_price(symbol)
+                if not current_price:
                     print(f"❌ Cannot get tick for {symbol}")
                     return False
-                price = tick.ask
-                
-            # Get best filling mode for this symbol
-            filling_mode = self.get_symbol_filling_mode(symbol)
+                price = current_price['ask']
+            
+            # Get filling mode
+            filling_mode = self._get_filling_mode(symbol)
             
             # Prepare close request
             request = {
@@ -254,6 +360,7 @@ class MT5Connector:
             return False
 
     def get_rates(self, symbol: str, timeframe: int, count: int):
+        """Get historical rate data"""
         try:
             self._rate_limit()
             
@@ -265,11 +372,57 @@ class MT5Connector:
             
         except Exception as e:
             self.last_error = f"Error getting rates: {str(e)}"
+            print(f"❌ Rates error: {e}")
             return None
-        
+
+    def get_orders(self, symbol: str = None):
+        """Get pending orders"""
+        try:
+            self._rate_limit()
+            
+            if symbol:
+                orders = mt5.orders_get(symbol=symbol)
+            else:
+                orders = mt5.orders_get()
+                
+            if orders is None:
+                return []
+                
+            return [order._asdict() for order in orders]
+            
+        except Exception as e:
+            self.last_error = f"Error getting orders: {str(e)}"
+            print(f"❌ Orders error: {e}")
+            return []
+
+    def cancel_order(self, order_ticket: int):
+        """Cancel pending order"""
+        try:
+            self._rate_limit()
+            
+            request = {
+                "action": mt5.TRADE_ACTION_REMOVE,
+                "order": order_ticket,
+            }
+            
+            result = mt5.order_send(request)
+            
+            if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                print(f"✅ Order {order_ticket} cancelled successfully")
+                return True
+            else:
+                error_code = result.retcode if result else "No result"
+                self.last_error = f"Cancel failed: {error_code}"
+                print(f"❌ Cancel order failed: {self.last_error}")
+                return False
+                
+        except Exception as e:
+            self.last_error = f"Error cancelling order: {str(e)}"
+            print(f"❌ Cancel order error: {e}")
+            return False
+
     def _rate_limit(self):
-        if hasattr(self, 'training_mode') and self.training_mode:
-            return
+        """Implement rate limiting for API requests"""
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         
@@ -279,4 +432,31 @@ class MT5Connector:
         self.last_request_time = time.time()
 
     def get_last_error(self):
+        """Get last error message"""
         return self.last_error
+
+    def test_connection(self):
+        """Test MT5 connection"""
+        try:
+            if not self.is_connected:
+                return False
+                
+            # Try to get account info
+            account_info = self.get_account_info()
+            if not account_info:
+                return False
+                
+            # Try to get a price quote
+            current_price = self.get_current_price("XAUUSD")
+            if not current_price:
+                return False
+                
+            return True
+            
+        except Exception as e:
+            self.last_error = f"Connection test failed: {str(e)}"
+            print(f"❌ Connection test error: {e}")
+            return False
+
+# Compatibility alias
+MT5Interface = MT5Connector

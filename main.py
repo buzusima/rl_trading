@@ -82,7 +82,7 @@ def create_directories():
 def main():
     """Main application entry point"""
     try:
-        print("🚀 Starting Simple AI Trading System...")
+        print("🚀 Starting AI Trading System...")
         print("=" * 50)
         print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 50)
@@ -100,16 +100,16 @@ def main():
             sys.exit(1)
         
         print("\n" + "=" * 50)
-        print("🎯 Initializing Simple Trading GUI...")
+        print("🎯 Initializing Trading GUI...")
         
         # Import and run GUI
         try:
-            from gui.minimal_gui import MinimalGUI
+            from gui.trading_gui import TradingGUI
             
             print("✅ GUI module imported successfully")
             
             # Create and run application
-            app = MinimalGUI()
+            app = TradingGUI()
             print("✅ GUI initialized successfully")
             
             print("🚀 Starting application...")
@@ -162,7 +162,7 @@ def main():
     
     finally:
         print("\n🧹 System shutdown complete")
-        print("Thank you for using Simple AI Trading System! 🚀")
+        print("Thank you for using AI Trading System! 🚀")
 
 if __name__ == "__main__":
     main()

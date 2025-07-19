@@ -13,16 +13,16 @@ except ImportError as e:
     print("Install with: pip install stable-baselines3")
     SB3_AVAILABLE = False
 
-class BasicRLAgent:
+class RLAgent:
     """
     Simplified RL Agent for Trading
     - PPO algorithm only
-    - Basic training and prediction
+    - Training and prediction
     - Essential model management
     """
     
     def __init__(self, environment, config: Dict = None):
-        print("🤖 Initializing Basic RL Agent...")
+        print("🤖 Initializing RL Agent...")
         
         # Core components
         self.env = environment
@@ -34,7 +34,7 @@ class BasicRLAgent:
             self.model = None
             return
         
-        # Basic agent configuration
+        # Agent configuration
         self.algorithm = 'PPO'  # Only PPO
         self.learning_rate = self.config.get('learning_rate', 0.0003)
         self.batch_size = self.config.get('batch_size', 64)
@@ -68,7 +68,7 @@ class BasicRLAgent:
         # Initialize model
         self._initialize_model()
         
-        print("✅ Basic RL Agent initialized:")
+        print("✅ RL Agent initialized:")
         print(f"   - Algorithm: {self.algorithm}")
         print(f"   - Learning Rate: {self.learning_rate}")
         print(f"   - Training Steps: {self.training_steps}")
@@ -92,7 +92,9 @@ class BasicRLAgent:
             
             vec_env = DummyVecEnv([make_env])
             
-            # Create PPO model
+            # Create PPO model - FIX: import torch functions properly
+            import torch.nn as nn
+            
             self.model = PPO(
                 policy='MlpPolicy',
                 env=vec_env,
@@ -111,7 +113,7 @@ class BasicRLAgent:
                 tensorboard_log=self.log_path,
                 policy_kwargs={
                     'net_arch': [256, 256],  # Simple network
-                    'activation_fn': 'tanh'
+                    'activation_fn': nn.Tanh  # FIX: Use nn.Tanh instead of 'tanh'
                 }
             )
             
@@ -119,6 +121,8 @@ class BasicRLAgent:
             
         except Exception as e:
             print(f"❌ Model initialization error: {e}")
+            import traceback
+            traceback.print_exc()
             self.model = None
 
     def _validate_environment(self):
@@ -146,3 +150,89 @@ class BasicRLAgent:
         except Exception as e:
             print(f"❌ Environment validation failed: {e}")
             raise e
+
+    def train(self, total_timesteps: int = None):
+        """Train the RL agent"""
+        try:
+            if self.model is None:
+                print("❌ No model to train - initialization failed")
+                return False
+                
+            timesteps = total_timesteps or self.training_steps
+            print(f"🎓 Training PPO agent for {timesteps} timesteps...")
+            
+            self.training_start_time = datetime.now()
+            self.model.learn(total_timesteps=timesteps, progress_bar=True)
+            
+            training_time = (datetime.now() - self.training_start_time).total_seconds()
+            print(f"✅ Training completed in {training_time:.1f} seconds")
+            
+            self.is_trained = True
+            self.total_timesteps_trained += timesteps
+            return True
+            
+        except Exception as e:
+            print(f"❌ Training error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def predict(self, observation):
+        """Predict action from observation"""
+        try:
+            if self.model is None:
+                print("❌ No model available for prediction")
+                return self.env.action_space.sample()  # Random action
+                
+            action, _ = self.model.predict(observation, deterministic=True)
+            return action
+            
+        except Exception as e:
+            print(f"❌ Prediction error: {e}")
+            return self.env.action_space.sample()
+
+    def save_model(self, filename: str = None):
+        """Save trained model"""
+        try:
+            if self.model is None:
+                print("❌ No model to save")
+                return None
+                
+            if filename is None:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"ppo_model_{timestamp}"
+                
+            filepath = os.path.join(self.model_save_path, filename)
+            self.model.save(filepath)
+            print(f"✅ Model saved: {filepath}")
+            return filepath
+            
+        except Exception as e:
+            print(f"❌ Save model error: {e}")
+            return None
+
+    def load_model(self, filename: str = None):
+        """Load trained model"""
+        try:
+            if filename is None:
+                # Find latest model
+                model_files = [f for f in os.listdir(self.model_save_path) if f.endswith('.zip')]
+                if not model_files:
+                    print("❌ No saved models found")
+                    return False
+                filename = max(model_files)
+                
+            filepath = os.path.join(self.model_save_path, filename)
+            if not os.path.exists(filepath):
+                print(f"❌ Model file not found: {filepath}")
+                return False
+                
+            self.model = PPO.load(filepath, env=DummyVecEnv([lambda: self.env]))
+            print(f"✅ Model loaded: {filepath}")
+            self.is_trained = True
+            return True
+            
+        except Exception as e:
+            print(f"❌ Load model error: {e}")
+            return False
+        

@@ -7,7 +7,7 @@ class Environment(gym.Env):
     def __init__(self, mt5_interface, config):
         super(Environment, self).__init__()
         
-        print("🏗️ Initializing Simple Trading Environment...")
+        print("🏗️ Initializing Trading Environment...")
         
         # Core components
         self.mt5_interface = mt5_interface
@@ -18,7 +18,7 @@ class Environment(gym.Env):
         self.initial_lot_size = config.get('lot_size', 0.01)
         self.max_positions = config.get('max_positions', 5)
         
-        # === SIMPLE OBSERVATION SPACE (30 features) ===
+        # === OBSERVATION SPACE (30 features) ===
         self.observation_space = spaces.Box(
             low=-10.0, 
             high=10.0, 
@@ -26,7 +26,7 @@ class Environment(gym.Env):
             dtype=np.float32
         )
         
-        # === SIMPLE ACTION SPACE (3 dimensions) ===
+        # === ACTION SPACE (3 dimensions) ===
         self.action_space = spaces.Box(
             low=np.array([0, 0.01, 0]),      # [action_type, volume, stop_loss]
             high=np.array([3, 0.10, 1]),     # [hold/buy/sell/close, volume, sl%]
@@ -48,7 +48,7 @@ class Environment(gym.Env):
         self.total_trades = 0
         self.winning_trades = 0
         
-        print("✅ Simple Environment initialized:")
+        print("✅ Environment initialized:")
         print(f"   - Symbol: {self.symbol}")
         print(f"   - Observation Space: {self.observation_space.shape[0]} features")
         print(f"   - Action Space: {self.action_space.shape[0]} dimensions")
@@ -129,7 +129,7 @@ class Environment(gym.Env):
                 obs[3] = (prices[-1] - np.mean(prices)) / np.std(prices)  # Z-score
                 obs[4] = 1.0 if prices[-1] > prices[-2] else -1.0  # Direction
                 
-                # Simple indicators
+                # indicators
                 if len(self.last_prices) >= 20:
                     sma_20 = np.mean(self.last_prices[-20:])
                     obs[5] = (prices[-1] - sma_20) / sma_20  # SMA deviation
@@ -207,7 +207,7 @@ class Environment(gym.Env):
             return np.zeros(30, dtype=np.float32)
 
     def _execute_action(self, action_type, volume, stop_loss):
-        """Execute simple trading action"""
+        """Execute trading action"""
         try:
             reward = 0.0
             
@@ -348,7 +348,7 @@ class Environment(gym.Env):
             print(f"Market data update error: {e}")
 
     def _calculate_rsi(self, period=14):
-        """Calculate simple RSI"""
+        """Calculate RSI"""
         try:
             if len(self.last_prices) < period + 1:
                 return 0.5  # Neutral RSI

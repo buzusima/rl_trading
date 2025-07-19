@@ -5,9 +5,9 @@ import json
 import os
 from datetime import datetime
 
-class MinimalGUI:
+class TradingGUI:
     """
-    Minimal Trading GUI
+    Trading GUI
     - Connection management
     - Basic training controls
     - Account monitoring
@@ -19,7 +19,7 @@ class MinimalGUI:
         
         # Main window
         self.root = tk.Tk()
-        self.root.title("🤖 Simple AI Trading System")
+        self.root.title("🤖 AI Trading System")
         self.root.geometry("800x600")
         self.root.configure(bg='#2b2b2b')
         
@@ -60,7 +60,7 @@ class MinimalGUI:
         }
         
         try:
-            config_file = 'config/simple_config.json'
+            config_file = 'config/config.json'
             if os.path.exists(config_file):
                 with open(config_file, 'r') as f:
                     loaded_config = json.load(f)
@@ -75,7 +75,7 @@ class MinimalGUI:
         """Save current configuration"""
         try:
             os.makedirs('config', exist_ok=True)
-            config_file = 'config/simple_config.json'
+            config_file = 'config/config.json'
             
             # Update config with current GUI values
             self.config.update({
@@ -275,8 +275,8 @@ class MinimalGUI:
             self.log_message("🔌 Connecting to MT5...", "INFO")
             
             # Import MT5 interface
-            from core.mt5_connector import MT5Interface
-            self.mt5_interface = MT5Interface(self.config)
+            from core.mt5_connector import MT5Connector
+            self.mt5_interface = MT5Connector(self.config)
             
             # Attempt connection
             if self.mt5_interface.connect():
@@ -324,15 +324,15 @@ class MinimalGUI:
         """Training worker thread"""
         try:
             # Initialize components
-            from core.simple_environment import Environment
-            from core.basic_agent import BasicRLAgent
+            from core.environment import Environment
+            from core.rl_agent import RLAgent
             
             # Create environment
             self.environment = Environment(self.mt5_interface, self.config)
             self.log_message("✅ Environment created", "INFO")
             
             # Create agent
-            self.agent = BasicRLAgent(self.environment, self.config)
+            self.agent = RLAgent(self.environment, self.config)
             self.log_message("✅ Agent created", "INFO")
             
             # Start training
@@ -495,7 +495,7 @@ class MinimalGUI:
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
             
             # Add welcome message
-            self.log_message("🚀 Simple AI Trading System started", "SUCCESS")
+            self.log_message("🚀 AI Trading System started", "SUCCESS")
             self.log_message("📋 Connect to MT5 to begin", "INFO")
             
             # Start main loop

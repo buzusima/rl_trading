@@ -2,3 +2,4 @@
 .json
 .db
 __pycache__/
+data/

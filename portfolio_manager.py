@@ -8,6 +8,7 @@ from enum import Enum
 from collections import deque
 import warnings
 warnings.filterwarnings('ignore')
+from environment import MarketRegime, VolatilityRegime
 
 class RiskLevel(Enum):
     """Portfolio Risk Levels"""
@@ -673,7 +674,7 @@ class IntelligentPositionSizer:
         except Exception as e:
             print(f"Feedback processing error: {e}")
 
-class ProfessionalPortfolioManager:
+class AIPortfolioManager:
     """
     Professional AI-Powered Portfolio Management System
     - Dynamic capital allocation

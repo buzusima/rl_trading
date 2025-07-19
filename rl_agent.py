@@ -1442,6 +1442,46 @@ class ProfessionalRLAgent:
             return 'UNKNOWN'
 
 
+    def get_agent_status(self):
+        """Get current status of all agents"""
+        try:
+            status = {}
+            
+            # Default agent status
+            default_status = {
+                'decisions': 0,
+                'rewards': [],
+                'win_rate': 0.0,
+                'status': 'Inactive'
+            }
+            
+            # Check if we have agents
+            if hasattr(self, 'agents') and self.agents:
+                for agent_name, agent in self.agents.items():
+                    status[agent_name] = {
+                        'decisions': getattr(self, f'{agent_name.lower()}_decisions', 0),
+                        'rewards': getattr(self, f'{agent_name.lower()}_rewards', []),
+                        'win_rate': getattr(self, f'{agent_name.lower()}_win_rate', 0.0),
+                        'status': 'Active' if agent else 'Inactive'
+                    }
+            else:
+                # Default agents if none exist
+                status = {
+                    'PPO': default_status.copy(),
+                    'SAC': default_status.copy(),
+                    'TD3': default_status.copy()
+                }
+                
+            return status
+            
+        except Exception as e:
+            print(f"Get agent status error: {e}")
+            return {
+                'PPO': {'decisions': 0, 'rewards': [], 'win_rate': 0.0, 'status': 'Error'},
+                'SAC': {'decisions': 0, 'rewards': [], 'win_rate': 0.0, 'status': 'Error'},
+                'TD3': {'decisions': 0, 'rewards': [], 'win_rate': 0.0, 'status': 'Error'}
+            }
+
 # === FACTORY FUNCTIONS ===
 
 def create_professional_agent(environment, config=None):

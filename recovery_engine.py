@@ -2071,6 +2071,64 @@ class ProfessionalRecoveryEngine:
         except Exception as e:
             return f"Report generation error: {e}"
 
+    def reset(self):
+        """Reset recovery engine to initial state"""
+        try:
+            # Reset recovery state
+            self.is_active = False
+            self.current_mode = RecoveryMode.INACTIVE
+            self.current_level = 0
+            self.max_recovery_level = 8
+            
+            # Reset counters
+            self.consecutive_losses = 0
+            self.recovery_start_balance = 0.0
+            self.recovery_target = 0.0
+            
+            # Clear histories
+            if hasattr(self, 'recovery_history'):
+                self.recovery_history.clear()
+            if hasattr(self, 'loss_history'):
+                self.loss_history.clear()
+                
+            # Reset performance metrics
+            self.success_rate = 0.0
+            self.avg_recovery_time = 0.0
+            self.total_recoveries = 0
+            self.successful_recoveries = 0
+            
+            print("🔄 Recovery Engine reset to initial state")
+            return True
+            
+        except Exception as e:
+            print(f"Recovery reset error: {e}")
+            return False
+
+    def get_state(self):
+        """Get current recovery engine state"""
+        try:
+            return {
+                'is_active': getattr(self, 'is_active', False),
+                'current_mode': getattr(self, 'current_mode', RecoveryMode.INACTIVE).value,
+                'current_level': getattr(self, 'current_level', 0),
+                'consecutive_losses': getattr(self, 'consecutive_losses', 0),
+                'success_rate': getattr(self, 'success_rate', 0.0)
+            }
+        except Exception as e:
+            print(f"Get recovery state error: {e}")
+            return {'error': str(e)}
+
+    def set_config(self, config):
+        """Update recovery engine configuration"""
+        try:
+            if config:
+                self.config.update(config)
+                print("✅ Recovery engine config updated")
+                return True
+            return False
+        except Exception as e:
+            print(f"Set recovery config error: {e}")
+            return False
 
 # ========================= FACTORY FUNCTIONS & EXPORTS =========================
 

@@ -24,9 +24,9 @@ import time
 from environment import ProfessionalTradingEnvironment, TradingState, MarketRegime
 from recovery_engine import ProfessionalRecoveryEngine, RecoveryMode
 from mt5_interface import MT5Interface
-from rl_agent import MultiAgentRLSystem
+from rl_agent import ProfessionalRLAgent
 from utils.data_handler import DataHandler
-from utils.visualizer import ProfessionalVisualizer
+from utils.visualizer import Visualizer
 from portfolio_manager import AIPortfolioManager, PortfolioMode
 
 class ProfessionalTradingGUI:
@@ -48,11 +48,28 @@ class ProfessionalTradingGUI:
         self.root.geometry("1600x1000")
         self.root.configure(bg='#1e1e1e')  # Dark theme
         
+        # Logging system attributes
+        self.all_logs = []
+        self.filtered_logs = []
+        self.log_count = 0
+        self.displayed_count = 0
+        self.max_log_entries = 1000
+        
+        # Log filtering
+        self.log_filters = {
+            'INFO': True,
+            'WARNING': True, 
+            'ERROR': True,
+            'SYSTEM': True,
+            'TRADING': True,
+            'DEBUG': False
+        }
+    
         # Core system components
         self.mt5_interface = MT5Interface()
         self.recovery_engine = ProfessionalRecoveryEngine()
         self.data_handler = DataHandler()
-        self.visualizer = ProfessionalVisualizer()
+        self.visualizer = Visualizer()
         
         # System state tracking
         self.is_training = False
@@ -77,9 +94,9 @@ class ProfessionalTradingGUI:
         self.system_efficiency = 0.0
         
         # Trading state tracking
-        self.current_trading_state = TradingState.ANALYZE
+        self.current_trading_state = TradingState.MARKET_ANALYSIS
         self.current_market_regime = MarketRegime.SIDEWAYS
-        self.current_portfolio_mode = PortfolioMode.BALANCED
+        self.current_portfolio_mode = PortfolioMode.GROWTH
         self.current_recovery_mode = RecoveryMode.INACTIVE
         
         # Performance metrics
@@ -164,6 +181,48 @@ class ProfessionalTradingGUI:
         self.setup_logs_interface()
         
         print("✅ Professional GUI setup completed!")
+    
+    def setup_performance_metrics(self, perf_metrics_frame):
+        """Setup performance metrics interface"""
+        try:
+            # Performance metrics display
+            metrics_scroll = tk.Scrollbar(perf_metrics_frame)
+            metrics_scroll.pack(side='right', fill='y')
+            
+            self.metrics_text = tk.Text(perf_metrics_frame, 
+                                    yscrollcommand=metrics_scroll.set,
+                                    height=20, width=80,
+                                    bg='#2e2e2e', fg='white',
+                                    font=('Consolas', 10))
+            self.metrics_text.pack(fill='both', expand=True)
+            metrics_scroll.config(command=self.metrics_text.yview)
+            
+            # Initial metrics display
+            self.update_performance_display()
+            
+        except Exception as e:
+            print(f"Setup performance metrics error: {e}")
+
+    def update_performance_display(self):
+        """Update performance metrics display"""
+        try:
+            if hasattr(self, 'metrics_text'):
+                self.metrics_text.delete(1.0, tk.END)
+                
+                # Get current metrics
+                metrics = {
+                    'System Status': 'Running',
+                    'Connection': 'Connected' if self.is_connected else 'Disconnected',
+                    'Trading': 'Active' if self.is_trading else 'Inactive',
+                    'Training': 'Active' if self.is_training else 'Inactive'
+                }
+                
+                # Display metrics
+                for key, value in metrics.items():
+                    self.metrics_text.insert(tk.END, f"{key}: {value}\n")
+                    
+        except Exception as e:
+            print(f"Performance display update error: {e}")
 
     def setup_professional_style(self):
         """Setup professional dark theme styling"""
@@ -2043,7 +2102,7 @@ class ProfessionalTradingGUI:
             self.trading_env.portfolio_manager = self.portfolio_manager
             
             # Initialize multi-agent RL system
-            self.rl_agent_system = MultiAgentRLSystem(self.trading_env, self.config)
+            self.rl_agent_system = ProfessionalRLAgent(self.trading_env, self.config)
             
             # Load trained models if available
             if self.rl_agent_system.load_models():
@@ -2181,7 +2240,7 @@ class ProfessionalTradingGUI:
         except Exception as e:
             self.log_message(f"❌ Emergency stop error: {str(e)}", "ERROR")
             messagebox.showerror("Emergency Stop Error", f"Error during emergency stop: {str(e)}")
-
+ 
     def start_professional_training(self):
         """Start professional multi-agent training"""
         if not self.is_connected:
@@ -2204,7 +2263,7 @@ class ProfessionalTradingGUI:
             self.trading_env.set_training_mode(True)
             
             # Initialize RL system for training
-            self.rl_agent_system = MultiAgentRLSystem(self.trading_env, self.config)
+            self.rl_agent_system = ProfessionalRLAgent(self.trading_env, self.config)
             
             # Update training GUI state
             self.is_training = True
@@ -2424,7 +2483,7 @@ class ProfessionalTradingGUI:
             # Update trading state
             state_text = f"🔍 {self.current_trading_state.value}"
             state_colors = {
-                TradingState.ANALYZE: '#ffc107',
+                TradingState.MARKET_ANALYSIS: '#ffc107',
                 TradingState.ENTRY: '#28a745',
                 TradingState.MANAGE: '#17a2b8',
                 TradingState.EXIT: '#dc3545',

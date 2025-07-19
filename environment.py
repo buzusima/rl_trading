@@ -7,10 +7,19 @@ from typing import Dict, List, Tuple, Any
 import time
 from datetime import datetime, timedelta
 from enum import Enum
-import talib as ta
 from collections import deque
 import warnings
 warnings.filterwarnings('ignore')
+
+# pandas-ta import with fallback
+try:
+    import pandas_ta as ta
+    TALIB_AVAILABLE = True  # เก็บชื่อเดิมเพื่อความเข้ากันได้
+    print("✅ pandas-ta library available")
+except ImportError:
+    TALIB_AVAILABLE = False
+    print("⚠️ pandas-ta not available, using manual calculations")
+    print("Install with: pip install pandas-ta")
 
 class MarketRegime(Enum):
     """Market Regime Detection"""
@@ -21,6 +30,15 @@ class MarketRegime(Enum):
     LOW_VOLATILITY = "LOW_VOLATILITY"
     BREAKOUT = "BREAKOUT"
     REVERSAL = "REVERSAL"
+
+class VolatilityRegime(Enum):
+    """Volatility Regime Classification"""
+    VERY_LOW = "VERY_LOW"
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH" 
+    VERY_HIGH = "VERY_HIGH"
+    EXTREME = "EXTREME"
 
 class TradingState(Enum):
     """Enhanced Trading States"""
@@ -1437,7 +1455,16 @@ class ProfessionalTradingEnvironment(gym.Env):
         except Exception as e:
             print(f"Performance summary error: {e}")
             return {'error': str(e)}
-
+    
+    def set_training_mode(self, is_training=True):
+        """Set training mode to bypass unnecessary checks"""
+        self.training_mode = is_training
+        if is_training:
+            self.min_request_interval = 0.01  # เร็วขึ้น
+            print("MT5 Interface: Training mode enabled")
+        else:
+            self.min_request_interval = 0.1   # ปกติ
+            print("MT5 Interface: Live mode enabled")   
 
 # ========================= TECHNICAL ANALYZER CLASS =========================
 

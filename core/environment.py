@@ -1,103 +1,152 @@
+# core/environment.py - Recovery Trading Environment (ทับของเดิม)
+
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+import pandas as pd
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
-class Environment(gym.Env):    
-    def __init__(self, mt5_interface, config):
+class Environment(gym.Env):
+    """
+    Recovery Trading Environment for AI Agent
+    - Specialized for "แก้ไม้" (Recovery) strategy
+    - Uses M5 XAUUSD historical data  
+    - Dynamic position sizing based on P&L
+    - Risk management with recovery logic
+    - REPLACES the old basic environment
+    """
+    
+    def __init__(self, mt5_interface, config, historical_data=None):
         super(Environment, self).__init__()
         
-        print("🏗️ Initializing Trading Environment...")
+        print("🔥 Initializing Recovery Environment...")
         
         # Core components
         self.mt5_interface = mt5_interface
         self.config = config
+        self.historical_data = historical_data
         
         # Trading parameters
         self.symbol = config.get('symbol', 'XAUUSD')
-        self.initial_lot_size = config.get('lot_size', 0.01)
+        self.base_lot_size = config.get('lot_size', 0.01)
         self.max_positions = config.get('max_positions', 5)
+        self.max_recovery_levels = config.get('max_recovery_levels', 3)
         
-        # === OBSERVATION SPACE (30 features) ===
+        # Recovery strategy parameters
+        self.recovery_multiplier = config.get('recovery_multiplier', 1.5)  # 1.5x lot size
+        self.recovery_threshold = config.get('recovery_threshold', -20.0)  # -$20 trigger
+        # Removed max_drawdown_limit - no stop trading limit
+        
+        # === OBSERVATION SPACE (40 features for recovery) ===
         self.observation_space = spaces.Box(
             low=-10.0, 
             high=10.0, 
-            shape=(30,),
+            shape=(40,),
             dtype=np.float32
         )
         
-        # === ACTION SPACE (3 dimensions) ===
+        # === ACTION SPACE (4 dimensions for recovery) ===
         self.action_space = spaces.Box(
-            low=np.array([0, 0.01, 0]),      # [action_type, volume, stop_loss]
-            high=np.array([3, 0.10, 1]),     # [hold/buy/sell/close, volume, sl%]
+            low=np.array([0, 0.01, 0, 0]),           # [action, volume, sl_pips, recovery_mode]
+            high=np.array([4, 0.50, 100, 2]),        # [HOLD/BUY/SELL/CLOSE/RECOVERY, max_vol, sl, recovery_type]
             dtype=np.float32
         )
         
-        # Episode tracking
+        # State tracking
         self.current_step = 0
+        self.data_index = 0
         self.episode_start_time = None
         self.episode_pnl = 0.0
+        self.total_pnl = 0.0
         self.max_drawdown = 0.0
         self.peak_equity = 0.0
         
-        # Market data
-        self.market_data = []
-        self.last_prices = []
+        # Recovery tracking
+        self.recovery_level = 0
+        self.in_recovery_mode = False
+        self.consecutive_losses = 0
+        self.recovery_start_balance = 0.0
+        self.recovery_target = 0.0
+        
+        # Position tracking
+        self.positions = []
+        self.position_history = []
+        self.last_trade_result = 0.0
         
         # Performance tracking
         self.total_trades = 0
         self.winning_trades = 0
+        self.losing_trades = 0
+        self.recovery_attempts = 0
+        self.successful_recoveries = 0
         
+        # Mode settings
         self.is_training_mode = config.get('training_mode', True)
+        
+        print("✅ Recovery Environment initialized:")
+        print(f"   - Symbol: {self.symbol}")
+        print(f"   - Base Lot: {self.base_lot_size}")
+        print(f"   - Recovery Multiplier: {self.recovery_multiplier}x")
+        print(f"   - Max Recovery Levels: {self.max_recovery_levels}")
+        print(f"   - Recovery Threshold: ${self.recovery_threshold}")
+        print(f"   - Training Mode: {self.is_training_mode}")
+        print(f"   - No Drawdown Limit: Unlimited recovery attempts")
+
+    def set_historical_data(self, historical_data: pd.DataFrame):
+        """Set historical data for training"""
+        self.historical_data = historical_data
+        print(f"📊 Historical data set: {len(historical_data):,} rows")
 
     def reset(self, seed=None, options=None):
         """Reset environment to initial state"""
         super().reset(seed=seed)
         
-        print(f"🔄 Resetting Environment...")
+        print(f"🔄 Resetting Recovery Environment...")
         
         # Reset episode tracking
         self.current_step = 0
+        self.data_index = 50 if self.historical_data is not None else 0  # Start after indicators warmup
         self.episode_start_time = datetime.now()
         self.episode_pnl = 0.0
         self.max_drawdown = 0.0
         
-        # Get initial account info
-        try:
-            account_info = self.mt5_interface.get_account_info()
-            if account_info:
-                self.peak_equity = account_info.get('equity', 1000)
-        except:
-            self.peak_equity = 1000  # Default
+        # Reset recovery tracking
+        self.recovery_level = 0
+        self.in_recovery_mode = False
+        self.consecutive_losses = 0
+        self.recovery_start_balance = 1000.0  # Starting balance
+        self.recovery_target = 0.0
+        self.peak_equity = 1000.0
         
-        # Clear data
-        self.market_data.clear()
-        self.last_prices.clear()
-        
-        # Update market data
-        self.update_market_data()
+        # Reset positions
+        self.positions.clear()
+        self.position_history.clear()
+        self.last_trade_result = 0.0
         
         # Get initial observation
         observation = self._get_observation()
         info = self._get_info()
         
-        print("✅ Environment reset complete")
+        print("✅ Recovery Environment reset complete")
         return observation, info
 
     def step(self, action):
-        """Execute one step in the environment"""
+        """Execute one step in the recovery environment"""
         self.current_step += 1
+        self.data_index += 1
         
         # Parse action
         action_type = int(action[0])
         volume = float(action[1])
-        stop_loss = float(action[2])
+        sl_pips = float(action[2])
+        recovery_mode = int(action[3])
         
-        # Update market data
-        self.update_market_data()
+        # Execute action with recovery logic
+        reward = self._execute_recovery_action(action_type, volume, sl_pips, recovery_mode)
         
-        # Execute action
-        reward = self._execute_action(action_type, volume, stop_loss)
+        # Update recovery state
+        self._update_recovery_state()
         
         # Get new observation
         observation = self._get_observation()
@@ -111,91 +160,84 @@ class Environment(gym.Env):
         return observation, reward, done, False, info
 
     def _get_observation(self):
-        """Get simplified observation (30 features)"""
+        """Get comprehensive observation for recovery trading (40 features)"""
         try:
-            obs = np.zeros(30, dtype=np.float32)
+            obs = np.zeros(40, dtype=np.float32)
             
-            # === MARKET DATA (10 features) ===
-            if len(self.last_prices) >= 5:
-                # Basic OHLC normalized
-                prices = self.last_prices[-5:]
-                obs[0] = (prices[-1] - prices[0]) / prices[0]  # Price change
-                obs[1] = (max(prices) - min(prices)) / prices[0]  # Range
-                obs[2] = np.std(prices) / np.mean(prices)  # Volatility
-                std_val = np.std(prices)
-                if std_val > 0:
-                    obs[3] = (prices[-1] - np.mean(prices)) / std_val
-                else:
-                    obs[3] = 0.0  # ถ้าราคาไม่เปลี่ยน = neutral
-                obs[4] = 1.0 if prices[-1] > prices[-2] else -1.0  # Direction
+            # === MARKET DATA (15 features) ===
+            if self.historical_data is not None and self.data_index < len(self.historical_data):
+                current_data = self.historical_data.iloc[self.data_index]
                 
-                # indicators
-                if len(self.last_prices) >= 20:
-                    sma_20 = np.mean(self.last_prices[-20:])
-                    obs[5] = (prices[-1] - sma_20) / sma_20  # SMA deviation
+                # Basic OHLC features (normalized)
+                close_price = current_data['close']
+                obs[0] = (current_data['high'] - current_data['low']) / close_price  # Range
+                obs[1] = (current_data['close'] - current_data['open']) / close_price  # Candle body
                 
-                if len(self.last_prices) >= 14:
-                    obs[6] = self._calculate_rsi()  # RSI
+                # Trend indicators
+                obs[2] = (current_data['close'] - current_data['SMA_20']) / current_data['ATR_14']  # SMA20 position
+                obs[3] = (current_data['close'] - current_data['SMA_50']) / current_data['ATR_14']  # SMA50 position
+                obs[4] = (current_data['EMA_12'] - current_data['EMA_26']) / current_data['ATR_14']  # EMA spread
                 
-                # MACD approximation
-                if len(self.last_prices) >= 26:
-                    ema_12 = np.mean(self.last_prices[-12:])
-                    ema_26 = np.mean(self.last_prices[-26:])
-                    obs[7] = (ema_12 - ema_26) / ema_26  # MACD line
+                # Momentum indicators
+                obs[5] = (current_data['RSI_14'] - 50) / 50  # RSI normalized (-1 to 1)
+                obs[6] = current_data['MACD'] / current_data['ATR_14']  # MACD normalized
+                obs[7] = current_data['MACD_Histogram'] / current_data['ATR_14']  # MACD momentum
                 
-                obs[8] = np.random.normal(0, 0.1)  # Market noise
-                obs[9] = np.random.normal(0, 0.1)  # Future expansion
+                # Volatility indicators
+                obs[8] = current_data['BB_Position']  # Position in Bollinger Bands (0 to 1)
+                obs[9] = current_data['BB_Width']  # Bollinger Band width
+                obs[10] = current_data['ATR_14'] / close_price  # ATR percentage
+                obs[11] = current_data['Volatility_Regime']  # Volatility regime
+                
+                # Market context
+                obs[12] = current_data['Trend_Strength']  # Trend strength
+                obs[13] = current_data['RSI_Momentum'] / 10  # RSI momentum
+                obs[14] = current_data['MACD_Momentum'] / current_data['ATR_14']  # MACD momentum
             
-            # === ACCOUNT INFO (10 features) ===
-            try:
-                account_info = self.mt5_interface.get_account_info()
-                if account_info:
-                    balance = account_info.get('balance', 1000)
-                    equity = account_info.get('equity', 1000)
-                    margin = account_info.get('margin', 0)
-                    
-                    obs[10] = balance / 10000  # Normalized balance
-                    obs[11] = equity / 10000   # Normalized equity
-                    obs[12] = margin / balance if balance > 0 else 0  # Margin ratio
-                    obs[13] = (equity - balance) / balance if balance > 0 else 0  # P&L ratio
-                    obs[14] = self.episode_pnl / balance if balance > 0 else 0  # Episode P&L
-            except:
-                pass  # Keep zeros
+            # === RECOVERY STATE (10 features) ===
+            obs[15] = self.recovery_level / self.max_recovery_levels  # Current recovery level
+            obs[16] = 1.0 if self.in_recovery_mode else 0.0  # Recovery mode flag
+            obs[17] = self.consecutive_losses / 10  # Consecutive losses (normalized)
+            obs[18] = min(self.episode_pnl / 100, 5.0)  # Episode P&L (capped)
+            obs[19] = min(self.total_pnl / 1000, 5.0)  # Total P&L (capped)
+            obs[20] = self.max_drawdown / 500  # Max drawdown (normalized)
+            obs[21] = len(self.positions) / self.max_positions  # Position count ratio
+            obs[22] = self.last_trade_result / 50  # Last trade result
+            obs[23] = (self.recovery_target - self.total_pnl) / 100 if self.in_recovery_mode else 0  # Recovery distance
+            obs[24] = self.recovery_attempts / 10  # Recovery attempts
             
-            # === POSITION INFO (10 features) ===
-            try:
-                positions = self.mt5_interface.get_positions()
-                obs[15] = len(positions) / self.max_positions  # Position count ratio
+            # === POSITION ANALYSIS (8 features) ===
+            if self.positions:
+                total_volume = sum(pos['volume'] for pos in self.positions)
+                total_profit = sum(pos['profit'] for pos in self.positions)
+                avg_entry = np.mean([pos['entry_price'] for pos in self.positions])
                 
-                if positions:
-                    total_volume = sum(pos.get('volume', 0) for pos in positions)
-                    total_profit = sum(pos.get('profit', 0) for pos in positions)
-                    
-                    obs[16] = total_volume / 1.0  # Total volume
-                    obs[17] = total_profit / 100  # Total profit normalized
-                    
-                    # Position distribution
-                    buy_count = sum(1 for pos in positions if pos.get('type', 0) == 0)
-                    sell_count = len(positions) - buy_count
-                    obs[18] = buy_count / max(len(positions), 1)  # Buy ratio
-                    obs[19] = sell_count / max(len(positions), 1)  # Sell ratio
-            except:
-                pass  # Keep zeros
+                obs[25] = total_volume / 1.0  # Total volume
+                obs[26] = total_profit / 100  # Total unrealized P&L
+                obs[27] = len([p for p in self.positions if p['type'] == 'BUY']) / max(len(self.positions), 1)  # Buy ratio
+                obs[28] = len([p for p in self.positions if p['type'] == 'SELL']) / max(len(self.positions), 1)  # Sell ratio
+                
+                if self.historical_data is not None and self.data_index < len(self.historical_data):
+                    current_price = self.historical_data.iloc[self.data_index]['close']
+                    obs[29] = (current_price - avg_entry) / current_price  # Average position distance
             
-            # === TIME & SESSION INFO (5 features) ===
-            now = datetime.now()
-            obs[20] = now.hour / 24  # Hour of day
-            obs[21] = now.weekday() / 7  # Day of week
-            obs[22] = self.current_step / 1000  # Episode progress
-            obs[23] = np.random.normal(0, 0.1)  # Session indicator
-            obs[24] = np.random.normal(0, 0.1)  # Future expansion
+            obs[30] = self.winning_trades / max(self.total_trades, 1)  # Win rate
+            obs[31] = self.successful_recoveries / max(self.recovery_attempts, 1)  # Recovery success rate
+            obs[32] = 0.0  # Reserved for future use
             
-            # === TRADING STATS (5 features) ===
-            obs[25] = self.total_trades / 100  # Total trades normalized
-            obs[26] = self.winning_trades / max(self.total_trades, 1)  # Win rate
-            obs[27] = self.max_drawdown / 100  # Max drawdown
-            obs[28] = np.random.normal(0, 0.1)  # Reserved
-            obs[29] = np.random.normal(0, 0.1)  # Reserved
+            # === TIME & SESSION (4 features) ===
+            if self.historical_data is not None and self.data_index < len(self.historical_data):
+                current_time = self.historical_data.index[self.data_index]
+                obs[33] = current_time.hour / 24  # Hour of day
+                obs[34] = current_time.weekday() / 7  # Day of week
+                obs[35] = (current_time.hour >= 8 and current_time.hour <= 17) * 1.0  # London session
+                obs[36] = (current_time.hour >= 13 and current_time.hour <= 22) * 1.0  # NY session
+            
+            # === RISK METRICS (3 features) ===
+            # Removed drawdown risk calculation - no limits
+            obs[37] = 0.0  # Reserved (was drawdown risk)
+            obs[38] = self.current_step / 1000  # Episode progress
+            obs[39] = 0.0  # Reserved
             
             # Clip values to valid range
             obs = np.clip(obs, -10.0, 10.0)
@@ -203,290 +245,303 @@ class Environment(gym.Env):
             return obs
             
         except Exception as e:
-            print(f"Observation error: {e}")
-            return np.zeros(30, dtype=np.float32)
+            print(f"❌ Observation error: {e}")
+            return np.zeros(40, dtype=np.float32)
 
-    def _execute_action(self, action_type, volume, stop_loss):
-        """Execute trading action"""
+    def _execute_recovery_action(self, action_type, volume, sl_pips, recovery_mode):
+        """Execute trading action with recovery logic"""
         try:
             reward = 0.0
             
-            if action_type == 0:  # Hold
-                reward = 0.1  # Small positive reward for patience
+            if action_type == 0:  # HOLD
+                reward = self._handle_hold()
                 
-            elif action_type == 1:  # Buy
-                reward = self._execute_buy(volume, stop_loss)
+            elif action_type == 1:  # BUY
+                reward = self._handle_buy(volume, sl_pips)
                 
-            elif action_type == 2:  # Sell
-                reward = self._execute_sell(volume, stop_loss)
+            elif action_type == 2:  # SELL
+                reward = self._handle_sell(volume, sl_pips)
                 
-            elif action_type == 3:  # Close all
-                reward = self._close_all_positions()
+            elif action_type == 3:  # CLOSE ALL
+                reward = self._handle_close_all()
+                
+            elif action_type == 4:  # RECOVERY ACTION
+                reward = self._handle_recovery_action(recovery_mode, volume)
             
             return reward
             
         except Exception as e:
-            print(f"Action execution error: {e}")
-            return -1.0  # Penalty for errors
-
-    def _execute_buy(self, volume, stop_loss):
-        """Execute buy order"""
-        try:
-            # ✅ Training Mode - จำลองผลลัพธ์
-            if self.is_training_mode:
-                # จำลองการซื้อ ไม่เรียก MT5 จริง
-                import random
-                
-                # จำลอง position limits
-                simulated_positions = getattr(self, '_sim_positions', 0)
-                if simulated_positions >= self.max_positions:
-                    return -0.5  # Penalty for hitting limits
-                
-                # จำลองความสำเร็จ (80% success rate)
-                if random.random() < 0.8:
-                    self.total_trades += 1
-                    self._sim_positions = simulated_positions + 1
-                    return 1.0  # Reward for successful trade
-                else:
-                    return -0.5  # Penalty for failed trade
-            
-            # ✅ Live Trading Mode - เรียก MT5 จริง
-            else:
-                # Check position limits
-                positions = self.mt5_interface.get_positions()
-                if len(positions) >= self.max_positions:
-                    return -0.5  # Penalty for hitting limits
-                
-                # Get current price
-                price_info = self.mt5_interface.get_current_price(self.symbol)
-                if not price_info:
-                    return -1.0
-                
-                price = price_info['ask']
-                sl_price = price * (1 - stop_loss) if stop_loss > 0 else None
-                
-                # Place order
-                success = self.mt5_interface.place_order(
-                    symbol=self.symbol,
-                    order_type='buy',
-                    volume=volume,
-                    price=price,
-                    sl=sl_price
-                )
-                
-                if success:
-                    self.total_trades += 1
-                    return 1.0  # Reward for successful trade
-                else:
-                    return -0.5  # Penalty for failed trade
-                    
-        except Exception as e:
-            print(f"Buy execution error: {e}")
+            print(f"❌ Recovery action execution error: {e}")
             return -1.0
 
-    def _execute_sell(self, volume, stop_loss):
-        """Execute sell order"""
-        try:
-            # ✅ Training Mode - จำลองผลลัพธ์
-            if self.is_training_mode:
-                # จำลองการขาย ไม่เรียก MT5 จริง
-                import random
-                
-                # จำลอง position limits
-                simulated_positions = getattr(self, '_sim_positions', 0)
-                if simulated_positions >= self.max_positions:
-                    return -0.5  # Penalty for hitting limits
-                
-                # จำลองความสำเร็จ (80% success rate)
-                if random.random() < 0.8:
-                    self.total_trades += 1
-                    self._sim_positions = simulated_positions + 1
-                    return 1.0  # Reward for successful trade
-                else:
-                    return -0.5  # Penalty for failed trade
+    def _handle_hold(self):
+        """Handle HOLD action"""
+        # Small positive reward for patience when not in crisis
+        if not self.in_recovery_mode:
+            return 0.1
+        # Penalty for holding during recovery mode
+        return -0.2
+
+    def _handle_buy(self, volume, sl_pips):
+        """Handle BUY action with recovery sizing"""
+        # Adjust volume based on recovery level
+        adjusted_volume = self._calculate_recovery_volume(volume, 'BUY')
+        
+        # Get current price for simulation
+        if self.historical_data is not None and self.data_index < len(self.historical_data):
+            current_price = self.historical_data.iloc[self.data_index]['close']
+            entry_price = current_price + 0.0001  # Simulate spread
+        else:
+            entry_price = 2000.0  # Default for live trading
+        
+        # Calculate stop loss
+        sl_price = entry_price - (sl_pips * 0.01) if sl_pips > 0 else None
+        
+        # Create position
+        position = {
+            'type': 'BUY',
+            'volume': adjusted_volume,
+            'entry_price': entry_price,
+            'sl_price': sl_price,
+            'entry_time': self.current_step,
+            'profit': 0.0
+        }
+        
+        self.positions.append(position)
+        self.total_trades += 1
+        
+        # Reward calculation
+        reward = 1.0  # Base reward for taking action
+        
+        # Bonus for recovery actions
+        if self.in_recovery_mode:
+            reward += 0.5
+        
+        # Volume size reward/penalty
+        if adjusted_volume > self.base_lot_size * 2:
+            reward -= 0.3  # Penalty for oversizing
+        
+        return reward
+
+    def _handle_sell(self, volume, sl_pips):
+        """Handle SELL action with recovery sizing"""
+        # Similar to buy but opposite direction
+        adjusted_volume = self._calculate_recovery_volume(volume, 'SELL')
+        
+        if self.historical_data is not None and self.data_index < len(self.historical_data):
+            current_price = self.historical_data.iloc[self.data_index]['close']
+            entry_price = current_price - 0.0001  # Simulate spread
+        else:
+            entry_price = 2000.0
+        
+        sl_price = entry_price + (sl_pips * 0.01) if sl_pips > 0 else None
+        
+        position = {
+            'type': 'SELL',
+            'volume': adjusted_volume,
+            'entry_price': entry_price,
+            'sl_price': sl_price,
+            'entry_time': self.current_step,
+            'profit': 0.0
+        }
+        
+        self.positions.append(position)
+        self.total_trades += 1
+        
+        reward = 1.0
+        if self.in_recovery_mode:
+            reward += 0.5
+        if adjusted_volume > self.base_lot_size * 2:
+            reward -= 0.3
             
-            # ✅ Live Trading Mode - เรียก MT5 จริง
+        return reward
+
+    def _handle_close_all(self):
+        """Handle CLOSE ALL positions"""
+        if not self.positions:
+            return -0.1  # Small penalty for unnecessary action
+        
+        total_profit = 0.0
+        closed_count = 0
+        
+        for position in self.positions:
+            profit = self._calculate_position_profit(position)
+            total_profit += profit
+            closed_count += 1
+            
+            # Track trade results
+            if profit > 0:
+                self.winning_trades += 1
+                self.consecutive_losses = 0
             else:
-                # Check position limits
-                positions = self.mt5_interface.get_positions()
-                if len(positions) >= self.max_positions:
-                    return -0.5
-                
-                # Get current price
-                price_info = self.mt5_interface.get_current_price(self.symbol)
-                if not price_info:
-                    return -1.0
-                
-                price = price_info['bid']
-                sl_price = price * (1 + stop_loss) if stop_loss > 0 else None
-                
-                # Place order
-                success = self.mt5_interface.place_order(
-                    symbol=self.symbol,
-                    order_type='sell',
-                    volume=volume,
-                    price=price,
-                    sl=sl_price
-                )
-                
-                if success:
-                    self.total_trades += 1
-                    return 1.0
-                else:
-                    return -0.5
-                    
-        except Exception as e:
-            print(f"Sell execution error: {e}")
-            return -1.0
+                self.losing_trades += 1
+                self.consecutive_losses += 1
+        
+        # Clear positions
+        self.positions.clear()
+        
+        # Update P&L
+        self.episode_pnl += total_profit
+        self.total_pnl += total_profit
+        self.last_trade_result = total_profit
+        
+        # Check if recovery was successful
+        if self.in_recovery_mode and total_profit > 0:
+            if self.total_pnl >= self.recovery_target:
+                self._complete_recovery(success=True)
+                return 5.0  # Big reward for successful recovery
+        
+        # Update drawdown
+        if self.total_pnl < self.max_drawdown:
+            self.max_drawdown = self.total_pnl
+        
+        # Reward calculation
+        base_reward = 2.0  # Reward for closing positions
+        profit_reward = total_profit / 50  # Normalize profit
+        
+        return base_reward + profit_reward
 
-    def _close_all_positions(self):
-        """Close all open positions"""
-        try:
-            # ✅ Training Mode - จำลองผลลัพธ์
-            if self.is_training_mode:
-                simulated_positions = getattr(self, '_sim_positions', 0)
-                if simulated_positions == 0:
-                    return -0.1  # Small penalty for unnecessary action
-                
-                # จำลองการปิด positions
-                import random
-                total_profit = random.uniform(-50, 100)  # จำลองกำไร/ขาดทุน
-                
-                self._sim_positions = 0  # ปิดหมด
-                
-                if total_profit > 0:
-                    self.winning_trades += 1
-                
-                base_reward = 2.0  # Reward for cleaning up
-                profit_reward = total_profit / 100  # Normalize profit
-                return base_reward + profit_reward
-            
-            # ✅ Live Trading Mode - เรียก MT5 จริง
-            else:
-                positions = self.mt5_interface.get_positions()
-                if not positions:
-                    return -0.1  # Small penalty for unnecessary action
-                
-                closed_count = 0
-                total_profit = 0
-                
-                for pos in positions:
-                    ticket = pos.get('ticket')
-                    profit = pos.get('profit', 0)
-                    
-                    if self.mt5_interface.close_position(ticket):
-                        closed_count += 1
-                        total_profit += profit
-                        if profit > 0:
-                            self.winning_trades += 1
-                
-                # Reward based on profit and closure success
-                if closed_count > 0:
-                    base_reward = 2.0  # Reward for cleaning up
-                    profit_reward = total_profit / 100  # Normalize profit
-                    return base_reward + profit_reward
-                else:
-                    return -1.0  # Penalty for failed closures
-                    
-        except Exception as e:
-            print(f"Close all error: {e}")
-            return -1.0
+    def _handle_recovery_action(self, recovery_mode, volume):
+        """Handle specialized recovery actions"""
+        if not self.in_recovery_mode:
+            # Start recovery mode
+            self._start_recovery_mode()
+            return 1.0
+        
+        if recovery_mode == 1:  # Aggressive recovery
+            # Double the position size
+            aggressive_volume = volume * 2
+            return self._handle_buy(aggressive_volume, 0)  # No stop loss
+        
+        elif recovery_mode == 2:  # Conservative recovery
+            # Smaller incremental position
+            conservative_volume = volume * 0.5
+            return self._handle_buy(conservative_volume, 20)  # With stop loss
+        
+        return 0.0
 
-    def update_market_data(self):
-        """Update market data for observations"""
-        try:
-            # Get current price
-            price_info = self.mt5_interface.get_current_price(self.symbol)
-            if price_info:
-                current_price = (price_info['bid'] + price_info['ask']) / 2
-                self.last_prices.append(current_price)
-                
-                # Keep only last 50 prices
-                if len(self.last_prices) > 50:
-                    self.last_prices.pop(0)
-                    
-        except Exception as e:
-            print(f"Market data update error: {e}")
+    def _calculate_recovery_volume(self, base_volume, direction):
+        """Calculate position size based on recovery level"""
+        if not self.in_recovery_mode:
+            return base_volume
+        
+        # Recovery multiplier increases with level
+        multiplier = self.recovery_multiplier ** self.recovery_level
+        recovery_volume = base_volume * multiplier
+        
+        # Cap maximum volume
+        max_volume = self.base_lot_size * 10
+        return min(recovery_volume, max_volume)
 
-    def _calculate_rsi(self, period=14):
-        """Calculate RSI"""
-        try:
-            if len(self.last_prices) < period + 1:
-                return 0.5  # Neutral RSI
-            
-            prices = self.last_prices[-period-1:]
-            gains = []
-            losses = []
-            
-            for i in range(1, len(prices)):
-                change = prices[i] - prices[i-1]
-                if change > 0:
-                    gains.append(change)
-                    losses.append(0)
-                else:
-                    gains.append(0)
-                    losses.append(abs(change))
-            
-            avg_gain = np.mean(gains)
-            avg_loss = np.mean(losses)
-            
-            if avg_loss == 0:
-                return 1.0
-            
-            rs = avg_gain / avg_loss
-            rsi = 1 - (1 / (1 + rs))
-            
-            return (rsi - 0.5) * 2  # Normalize to -1 to 1
-            
-        except:
+    def _calculate_position_profit(self, position):
+        """Calculate current profit for a position"""
+        if self.historical_data is None or self.data_index >= len(self.historical_data):
             return 0.0
+        
+        current_price = self.historical_data.iloc[self.data_index]['close']
+        entry_price = position['entry_price']
+        volume = position['volume']
+        
+        if position['type'] == 'BUY':
+            pips = (current_price - entry_price) / 0.01
+        else:  # SELL
+            pips = (entry_price - current_price) / 0.01
+        
+        # Gold: $1 per pip per 0.01 lot
+        profit = pips * volume * 100
+        position['profit'] = profit
+        
+        return profit
+
+    def _update_recovery_state(self):
+        """Update recovery state based on current situation"""
+        # Check if should enter recovery mode
+        if not self.in_recovery_mode and self.total_pnl <= self.recovery_threshold:
+            self._start_recovery_mode()
+        
+        # Update position profits
+        for position in self.positions:
+            self._calculate_position_profit(position)
+        
+        # Check recovery completion
+        if self.in_recovery_mode and self.total_pnl >= self.recovery_target:
+            self._complete_recovery(success=True)
+
+    def _start_recovery_mode(self):
+        """Start recovery mode"""
+        self.in_recovery_mode = True
+        self.recovery_level = 1
+        self.recovery_start_balance = self.total_pnl
+        self.recovery_target = self.recovery_start_balance + abs(self.recovery_start_balance) + 10  # Recover + small profit
+        self.recovery_attempts += 1
+        
+        print(f"🔄 Recovery mode started: Level {self.recovery_level}, Target: ${self.recovery_target:.2f}")
+
+    def _complete_recovery(self, success=True):
+        """Complete recovery mode"""
+        self.in_recovery_mode = False
+        self.recovery_level = 0
+        self.consecutive_losses = 0
+        
+        if success:
+            self.successful_recoveries += 1
+            print(f"✅ Recovery successful! P&L: ${self.total_pnl:.2f}")
+        else:
+            print(f"❌ Recovery failed. P&L: ${self.total_pnl:.2f}")
 
     def _is_episode_done(self):
         """Check if episode should end"""
-        # End episode after certain steps or large drawdown
-        if self.current_step >= 1000:
+        # Removed max drawdown check - no trading limits
+        
+        # End if data exhausted
+        if self.historical_data is not None and self.data_index >= len(self.historical_data) - 1:
+            print(f"📈 Episode ended: Data exhausted")
             return True
-            
-        if self.max_drawdown > 500:  # $500 max loss
+        
+        # End after certain steps
+        if self.current_step >= 2000:
+            print(f"⏰ Episode ended: Max steps reached")
             return True
-            
+        
         return False
 
     def _get_info(self):
         """Get episode info"""
-        try:
-            account_info = self.mt5_interface.get_account_info()
-            positions = self.mt5_interface.get_positions()
-            
-            return {
-                'current_step': self.current_step,
-                'episode_pnl': self.episode_pnl,
-                'account_balance': account_info.get('balance', 0) if account_info else 0,
-                'account_equity': account_info.get('equity', 0) if account_info else 0,
-                'open_positions': len(positions),
-                'total_trades': self.total_trades,
-                'winning_trades': self.winning_trades,
-                'win_rate': self.winning_trades / max(self.total_trades, 1),
-                'max_drawdown': self.max_drawdown
-            }
-        except:
-            return {
-                'current_step': self.current_step,
-                'episode_pnl': 0,
-                'account_balance': 0,
-                'account_equity': 0,
-                'open_positions': 0,
-                'total_trades': 0,
-                'winning_trades': 0,
-                'win_rate': 0,
-                'max_drawdown': 0
-            }
-        
+        return {
+            'current_step': self.current_step,
+            'data_index': self.data_index,
+            'episode_pnl': self.episode_pnl,
+            'total_pnl': self.total_pnl,
+            'max_drawdown': self.max_drawdown,
+            'recovery_level': self.recovery_level,
+            'in_recovery_mode': self.in_recovery_mode,
+            'consecutive_losses': self.consecutive_losses,
+            'open_positions': len(self.positions),
+            'total_trades': self.total_trades,
+            'winning_trades': self.winning_trades,
+            'win_rate': self.winning_trades / max(self.total_trades, 1),
+            'recovery_attempts': self.recovery_attempts,
+            'successful_recoveries': self.successful_recoveries,
+            'recovery_success_rate': self.successful_recoveries / max(self.recovery_attempts, 1)
+        }
+
     def set_training_mode(self, is_training: bool):
         """Set training mode"""
         self.is_training_mode = is_training
         if is_training:
-            print("🎓 Environment set to TRAINING mode (simulation)")
-            self._sim_positions = 0  # Reset simulated positions
+            print("🎓 Environment set to TRAINING mode")
         else:
             print("🚀 Environment set to LIVE TRADING mode")
+
+    # ===== BACKWARD COMPATIBILITY =====
+    # เก็บ methods เดิมไว้เผื่อโค้ดเดิมยังเรียกใช้
+    
+    def update_market_data(self):
+        """Legacy method - not needed with historical data"""
+        pass
+    
+    def get_current_price(self, symbol):
+        """Legacy method - use historical data instead"""
+        if self.historical_data is not None and self.data_index < len(self.historical_data):
+            return self.historical_data.iloc[self.data_index]['close']
+        return 2000.0

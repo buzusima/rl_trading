@@ -1,8 +1,8 @@
-# core/agent.py - แก้ไข imports และ tensorboard issue
+# core/rl_agent.py - แก้ไข model save/load issues
 
 import os
 import json
-import numpy as np  # ← เพิ่มบรรทัดนี้!
+import numpy as np
 from datetime import datetime
 from typing import Dict, Optional, Any
 
@@ -24,7 +24,7 @@ class RLAgent:
     RL Agent for Trading
     - PPO algorithm only
     - Training and prediction
-    - Essential model management
+    - Fixed model save/load
     """
     
     def __init__(self, environment, config: Dict = None):
@@ -41,7 +41,7 @@ class RLAgent:
             return
         
         # Agent configuration
-        self.algorithm = 'PPO'  # Only PPO
+        self.algorithm = 'PPO'
         self.learning_rate = self.config.get('learning_rate', 0.0003)
         self.batch_size = self.config.get('batch_size', 64)
         self.n_steps = self.config.get('n_steps', 2048)
@@ -55,6 +55,7 @@ class RLAgent:
         
         # Model state
         self.model = None
+        self.vec_env = None  # เก็บ vectorized environment
         self.is_trained = False
         self.total_timesteps_trained = 0
         
@@ -63,13 +64,12 @@ class RLAgent:
         self.episode_rewards = []
         self.training_start_time = None
         
-        # File paths
-        self.model_save_path = 'models/'
-        self.log_path = 'logs/'
+        # File paths - แก้ไข: ให้ชัดเจน
+        self.model_save_path = os.path.abspath('models')
+        self.log_path = os.path.abspath('logs')
         
         # Create directories
-        os.makedirs(self.model_save_path, exist_ok=True)
-        os.makedirs(self.log_path, exist_ok=True)
+        self._create_directories()
         
         # Initialize model
         self._initialize_model()
@@ -78,9 +78,18 @@ class RLAgent:
         print(f"   - Algorithm: {self.algorithm}")
         print(f"   - Learning Rate: {self.learning_rate}")
         print(f"   - Training Steps: {self.training_steps}")
-        print(f"   - Observation Space: {self.env.observation_space.shape}")
-        print(f"   - Action Space: {self.env.action_space.shape}")
+        print(f"   - Save Path: {self.model_save_path}")
         print(f"   - Model Ready: {self.model is not None}")
+
+    def _create_directories(self):
+        """Create necessary directories"""
+        for path in [self.model_save_path, self.log_path]:
+            try:
+                os.makedirs(path, exist_ok=True)
+                print(f"✅ Directory ready: {path}")
+            except Exception as e:
+                print(f"❌ Failed to create {path}: {e}")
+                raise e
 
     def _initialize_model(self):
         """Initialize PPO model"""
@@ -92,18 +101,18 @@ class RLAgent:
             # Validate environment
             self._validate_environment()
             
-            # Create vectorized environment
+            # Create vectorized environment - เก็บไว้ใช้ทั้ง train และ load
             def make_env():
                 return Monitor(self.env, self.log_path)
             
-            vec_env = DummyVecEnv([make_env])
+            self.vec_env = DummyVecEnv([make_env])
             
-            # Create PPO model - แก้ไข: ไม่ใช้ tensorboard
+            # Create PPO model
             import torch.nn as nn
             
             self.model = PPO(
                 policy='MlpPolicy',
-                env=vec_env,
+                env=self.vec_env,
                 learning_rate=self.learning_rate,
                 n_steps=self.n_steps,
                 batch_size=self.batch_size,
@@ -116,9 +125,9 @@ class RLAgent:
                 max_grad_norm=0.5,
                 device='auto',
                 verbose=1,
-                tensorboard_log=None,  # ← แก้ไข: ไม่ใช้ tensorboard
+                tensorboard_log=None,
                 policy_kwargs={
-                    'net_arch': [256, 256],  # Simple network
+                    'net_arch': [256, 256],
                     'activation_fn': nn.Tanh
                 }
             )
@@ -127,14 +136,11 @@ class RLAgent:
             
         except Exception as e:
             print(f"❌ Model initialization error: {e}")
-            import traceback
-            traceback.print_exc()
             self.model = None
 
     def _validate_environment(self):
         """Validate environment compatibility"""
         try:
-            # Check observation and action spaces
             obs_shape = self.env.observation_space.shape
             action_shape = self.env.action_space.shape
             
@@ -145,19 +151,14 @@ class RLAgent:
             # Test environment reset
             obs, info = self.env.reset()
             print(f"   - Reset Test: ✅ Success")
-            print(f"   - Sample Observation Shape: {obs.shape}")
             
-            # Test environment step with VALID action
-            # Fix volume issue by using proper volume range
-            valid_action = np.array([0, 0.01, 0.0], dtype=np.float32)  # Hold, min volume, no SL
+            # Test environment step
+            valid_action = np.array([0, 0.01, 0.0], dtype=np.float32)
             obs, reward, done, truncated, info = self.env.step(valid_action)
             print(f"   - Step Test: ✅ Success")
-            print(f"   - Sample Reward: {reward}")
             
         except Exception as e:
             print(f"❌ Environment validation failed: {e}")
-            import traceback
-            traceback.print_exc()
             raise e
 
     def train(self, total_timesteps: int = None):
@@ -182,8 +183,6 @@ class RLAgent:
             
         except Exception as e:
             print(f"❌ Training error: {e}")
-            import traceback
-            traceback.print_exc()
             return False
 
     def predict(self, observation):
@@ -191,7 +190,7 @@ class RLAgent:
         try:
             if self.model is None:
                 print("❌ No model available for prediction")
-                return self.env.action_space.sample()  # Random action
+                return self.env.action_space.sample()
                 
             action, _ = self.model.predict(observation, deterministic=True)
             return action
@@ -201,7 +200,7 @@ class RLAgent:
             return self.env.action_space.sample()
 
     def save_model(self, filename: str = None):
-        """Save trained model"""
+        """Save trained model - แก้ไข: handle .zip extension properly"""
         try:
             if self.model is None:
                 print("❌ No model to save")
@@ -211,32 +210,76 @@ class RLAgent:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"ppo_model_{timestamp}"
                 
+            # แก้ไข: ให้แน่ใจว่า filename ไม่มี .zip (SB3 จะเพิ่มให้อัตโนมัติ)
+            if filename.endswith('.zip'):
+                filename = filename[:-4]
+                
             filepath = os.path.join(self.model_save_path, filename)
+            
+            # Save model (SB3 จะเพิ่ม .zip อัตโนมัติ)
             self.model.save(filepath)
-            print(f"✅ Model saved: {filepath}")
-            return filepath
+            
+            # Check if file was actually created
+            actual_filepath = filepath + '.zip'
+            if os.path.exists(actual_filepath):
+                print(f"✅ Model saved: {actual_filepath}")
+                return actual_filepath
+            else:
+                print(f"❌ Model save failed - file not found: {actual_filepath}")
+                return None
             
         except Exception as e:
             print(f"❌ Save model error: {e}")
             return None
 
     def load_model(self, filename: str = None):
-        """Load trained model"""
+        """Load trained model - แก้ไข: handle paths and environment properly"""
         try:
+            if not SB3_AVAILABLE:
+                print("❌ Cannot load model - SB3 not available")
+                return False
+                
+            # แก้ไข: หา model file ที่ถูกต้อง
             if filename is None:
                 # Find latest model
-                model_files = [f for f in os.listdir(self.model_save_path) if f.endswith('.zip')]
-                if not model_files:
-                    print("❌ No saved models found")
+                if not os.path.exists(self.model_save_path):
+                    print(f"❌ Model directory not found: {self.model_save_path}")
                     return False
-                filename = max(model_files)
+                    
+                model_files = [f for f in os.listdir(self.model_save_path) 
+                              if f.endswith('.zip') and f.startswith('ppo_model_')]
+                if not model_files:
+                    print(f"❌ No saved models found in {self.model_save_path}")
+                    return False
+                    
+                # Get latest file by modification time
+                model_files_with_time = []
+                for f in model_files:
+                    filepath = os.path.join(self.model_save_path, f)
+                    mtime = os.path.getmtime(filepath)
+                    model_files_with_time.append((mtime, f))
+                
+                model_files_with_time.sort(reverse=True)
+                filename = model_files_with_time[0][1]
+                print(f"🔍 Using latest model: {filename}")
+            
+            # แก้ไข: สร้าง full path ที่ถูกต้อง
+            if not filename.endswith('.zip'):
+                filename += '.zip'
                 
             filepath = os.path.join(self.model_save_path, filename)
+            
             if not os.path.exists(filepath):
                 print(f"❌ Model file not found: {filepath}")
                 return False
                 
-            self.model = PPO.load(filepath, env=DummyVecEnv([lambda: self.env]))
+            # แก้ไข: ใช้ vec_env เดิมที่สร้างตอน init
+            if self.vec_env is None:
+                print("❌ Vectorized environment not available")
+                return False
+                
+            # Load model with correct environment
+            self.model = PPO.load(filepath, env=self.vec_env)
             print(f"✅ Model loaded: {filepath}")
             self.is_trained = True
             return True
@@ -244,3 +287,58 @@ class RLAgent:
         except Exception as e:
             print(f"❌ Load model error: {e}")
             return False
+
+    def list_saved_models(self):
+        """List all saved models"""
+        try:
+            if not os.path.exists(self.model_save_path):
+                print(f"❌ Model directory not found: {self.model_save_path}")
+                return []
+                
+            model_files = [f for f in os.listdir(self.model_save_path) 
+                          if f.endswith('.zip') and f.startswith('ppo_model_')]
+            
+            if not model_files:
+                print(f"❌ No saved models found in {self.model_save_path}")
+                return []
+            
+            # Sort by modification time (newest first)
+            model_info = []
+            for f in model_files:
+                filepath = os.path.join(self.model_save_path, f)
+                mtime = os.path.getmtime(filepath)
+                size = os.path.getsize(filepath)
+                model_info.append({
+                    'filename': f,
+                    'path': filepath,
+                    'modified': datetime.fromtimestamp(mtime),
+                    'size_mb': size / (1024 * 1024)
+                })
+            
+            model_info.sort(key=lambda x: x['modified'], reverse=True)
+            
+            print(f"📋 Found {len(model_info)} saved models:")
+            for i, info in enumerate(model_info):
+                print(f"   {i+1}. {info['filename']} ({info['size_mb']:.1f}MB) - {info['modified']}")
+                
+            return model_info
+            
+        except Exception as e:
+            print(f"❌ List models error: {e}")
+            return []
+
+    def get_model_info(self):
+        """Get current model information"""
+        if self.model is None:
+            return {"status": "No model loaded"}
+            
+        return {
+            "status": "Model loaded",
+            "algorithm": self.algorithm,
+            "is_trained": self.is_trained,
+            "total_timesteps": self.total_timesteps_trained,
+            "learning_rate": self.learning_rate,
+            "policy": str(type(self.model.policy)),
+            "observation_space": str(self.env.observation_space.shape),
+            "action_space": str(self.env.action_space.shape)
+        }

@@ -3,5 +3,9 @@
   "lot_size": 0.01,
   "max_positions": 5,
   "training_steps": 10000,
-  "learning_rate": 0.0003
+  "learning_rate": 0.0003,
+  "recovery_multiplier": 1.5,
+  "recovery_threshold": -20.0,
+  "max_recovery_levels": 3,
+  "max_drawdown_limit": -500.0
 }

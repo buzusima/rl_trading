@@ -134,7 +134,7 @@ class TradingGUI:
         self.symbol_var = tk.StringVar(value=self.config.get('symbol', 'XAUUSD'))
         self.lot_size_var = tk.DoubleVar(value=self.config.get('lot_size', 0.01))
         self.max_positions_var = tk.IntVar(value=self.config.get('max_positions', 5))
-        self.training_steps_var = tk.IntVar(value=self.config.get('training_steps', 10000))
+        self.training_steps_var = tk.IntVar(value=self.config.get('training_steps', 100000))
         self.learning_rate_var = tk.DoubleVar(value=self.config.get('learning_rate', 0.0003))
         
         # Recovery config variables
@@ -152,7 +152,7 @@ class TradingGUI:
             'symbol': 'XAUUSD.v',  # ✅ Updated to correct symbol
             'lot_size': 0.02,      # ✅ Updated for $4000 account
             'max_positions': 3,
-            'training_steps': 10000,
+            'training_steps': 100000,  # ✅ Increased for comprehensive training
             'learning_rate': 0.0003,
             # Recovery settings
             'recovery_multiplier': 1.4,     # ✅ Updated for $4000 account
@@ -331,9 +331,10 @@ class TradingGUI:
         max_pos_entry.grid(row=2, column=1, sticky='w', padx=(10, 0))
         
         # Training steps
-        ttk.Label(config_grid, text="Training Steps:").grid(row=3, column=0, sticky='w')
-        training_steps_entry = ttk.Entry(config_grid, textvariable=self.training_steps_var, width=10)
+        ttk.Label(config_grid, text="Training Steps:", style='Thai.TLabel').grid(row=3, column=0, sticky='w')
+        training_steps_entry = ttk.Entry(config_grid, textvariable=self.training_steps_var, width=10, style='Thai.TEntry')
         training_steps_entry.grid(row=3, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(config_grid, text="(100,000 = comprehensive training)", style='Comment.TLabel').grid(row=3, column=2, sticky='w', padx=(5, 0))
         
         # Learning rate
         ttk.Label(config_grid, text="Learning Rate:").grid(row=4, column=0, sticky='w')
@@ -341,7 +342,7 @@ class TradingGUI:
         lr_entry.grid(row=4, column=1, sticky='w', padx=(10, 0))
         
         # === RECOVERY STRATEGY SECTION ===
-        recovery_frame = ttk.LabelFrame(self.training_frame, text="🔄 Recovery Strategy (แก้ไม้)")
+        recovery_frame = ttk.LabelFrame(self.training_frame, text="🔄 Recovery Strategy")
         recovery_frame.pack(fill='x', padx=10, pady=5)
         
         recovery_grid = ttk.Frame(recovery_frame)
@@ -351,24 +352,16 @@ class TradingGUI:
         ttk.Label(recovery_grid, text="Recovery Multiplier:", style='Thai.TLabel').grid(row=0, column=0, sticky='w')
         recovery_mult_entry = ttk.Entry(recovery_grid, textvariable=self.recovery_multiplier_var, width=10, style='Thai.TEntry')
         recovery_mult_entry.grid(row=0, column=1, sticky='w', padx=(10, 0))
-        ttk.Label(recovery_grid, text="(1.5 = เพิ่ม lot 1.5 เท่า)", style='Comment.TLabel').grid(row=0, column=2, sticky='w', padx=(5, 0))
         
         # Recovery threshold
         ttk.Label(recovery_grid, text="Recovery Threshold:", style='Thai.TLabel').grid(row=1, column=0, sticky='w')
         recovery_thresh_entry = ttk.Entry(recovery_grid, textvariable=self.recovery_threshold_var, width=10, style='Thai.TEntry')
         recovery_thresh_entry.grid(row=1, column=1, sticky='w', padx=(10, 0))
-        ttk.Label(recovery_grid, text="($ ขาดทุนเท่าไหร่เริ่มแก้ไม้)", style='Comment.TLabel').grid(row=1, column=2, sticky='w', padx=(5, 0))
         
         # Max recovery levels
         ttk.Label(recovery_grid, text="Max Recovery Levels:", style='Thai.TLabel').grid(row=2, column=0, sticky='w')
         max_recovery_entry = ttk.Entry(recovery_grid, textvariable=self.max_recovery_levels_var, width=10, style='Thai.TEntry')
         max_recovery_entry.grid(row=2, column=1, sticky='w', padx=(10, 0))
-        ttk.Label(recovery_grid, text="(แก้ไม้สูงสุดกี่ระดับ)", style='Comment.TLabel').grid(row=2, column=2, sticky='w', padx=(5, 0))
-        
-        # Note about no drawdown limit
-        ttk.Label(recovery_grid, text="Drawdown Limit:", style='Thai.TLabel').grid(row=3, column=0, sticky='w')
-        ttk.Label(recovery_grid, text="🚀 UNLIMITED", foreground='blue', style='Header.TLabel').grid(row=3, column=1, sticky='w', padx=(10, 0))
-        ttk.Label(recovery_grid, text="(ไม่มีการหยุดเทรด - แก้ไม้ไม่จำกัด)", style='Comment.TLabel').grid(row=3, column=2, sticky='w', padx=(5, 0))
         
         # === DATA SETTINGS SECTION ===
         data_frame = ttk.LabelFrame(self.training_frame, text="📊 Historical Data Settings")
@@ -382,8 +375,9 @@ class TradingGUI:
         ttk.Label(data_grid, text="M5 (5 นาที)", foreground='blue').grid(row=0, column=1, sticky='w', padx=(10, 0))
         
         # Lookback period
-        ttk.Label(data_grid, text="Lookback Period:").grid(row=1, column=0, sticky='w')
-        ttk.Label(data_grid, text="2 Years", foreground='blue').grid(row=1, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(data_grid, text="Lookback Period:", style='Thai.TLabel').grid(row=1, column=0, sticky='w')
+        ttk.Label(data_grid, text="2 Years (Full)", foreground='blue', style='Thai.TLabel').grid(row=1, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(data_grid, text="(730 days for comprehensive data)", style='Comment.TLabel').grid(row=1, column=2, sticky='w', padx=(5, 0))
         
         # Indicators (readonly)
         ttk.Label(data_grid, text="Indicators:", style='Thai.TLabel').grid(row=2, column=0, sticky='w')

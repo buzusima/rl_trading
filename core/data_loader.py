@@ -67,11 +67,12 @@ class HistoricalDataLoader:
             
             print(f"✅ Using symbol: {correct_symbol}")
             
-            # ✅ Adjusted date range (avoid future dates)
+            # ✅ Extended date range for full 2 years
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=min(730, 365))  # Max 2 years or 1 year
+            start_date = end_date - timedelta(days=730)  # Full 2 years
             
             print(f"📅 Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+            print("🎯 Targeting 2 full years of data for comprehensive training")
             
             # ✅ Try different timeframes if M5 fails
             rates = self._download_with_fallback(correct_symbol, start_date, end_date)
@@ -86,10 +87,20 @@ class HistoricalDataLoader:
             df.set_index('time', inplace=True)
             
             # Basic data info
+            actual_days = (df.index[-1] - df.index[0]).days
             print(f"✅ Downloaded {len(df)} candles")
             print(f"   - Period: {df.index[0]} to {df.index[-1]}")
+            print(f"   - Actual calendar days: {actual_days}")
             print(f"   - Data size: {len(df):,} rows")
             print(f"   - Approximate trading days: {len(df) / 288:.0f}")
+            
+            # ✅ Validate minimum data requirement
+            min_required = 50000  # Minimum for good training
+            if len(df) < min_required:
+                print(f"⚠️ Warning: Only {len(df)} data points (minimum recommended: {min_required})")
+                print("   This may affect training quality. Consider shorter period or different timeframe.")
+            else:
+                print(f"✅ Sufficient data for comprehensive training: {len(df):,} points")
             
             # Save raw data
             self.raw_data = df

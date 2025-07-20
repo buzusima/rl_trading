@@ -1,17 +1,15 @@
 # core/rl_agent.py - แก้ไข model save/load issues
 
 import os
-import json
 import numpy as np
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Dict
 
 # Stable-Baselines3 imports with error handling
 try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv
     from stable_baselines3.common.monitor import Monitor
-    from stable_baselines3.common.callbacks import BaseCallback
     SB3_AVAILABLE = True
     print("✅ Stable-Baselines3 available")
 except ImportError as e:
@@ -48,7 +46,7 @@ class RLAgent:
         self.n_epochs = self.config.get('n_epochs', 10)
         
         # Training parameters
-        self.training_steps = self.config.get('training_steps', 10000)
+        self.training_steps = self.config.get('training_steps', 100000)
         self.gamma = self.config.get('gamma', 0.99)
         self.gae_lambda = self.config.get('gae_lambda', 0.95)
         self.clip_range = self.config.get('clip_range', 0.2)

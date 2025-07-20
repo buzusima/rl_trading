@@ -2,7 +2,7 @@
   "symbol": "XAUUSD.v",
   "lot_size": 0.01,
   "max_positions": 5,
-  "training_steps": 10000,
+  "training_steps": 100000,
   "learning_rate": 0.0003,
   "recovery_multiplier": 1.5,
   "recovery_threshold": -20.0,

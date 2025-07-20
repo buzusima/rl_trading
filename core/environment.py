@@ -138,11 +138,29 @@ class Environment(gym.Env):
         self.current_step += 1
         self.data_index += 1
         
-        # Parse action
-        action_type = int(action[0])
-        volume = float(action[1])
-        sl_pips = float(action[2])
-        recovery_mode = int(action[3])
+        # ✅ Ensure action is proper numpy array with correct shape
+        if not isinstance(action, np.ndarray):
+            action = np.array(action, dtype=np.float32)
+        
+        # ✅ Handle both 1D and 2D action arrays from SB3
+        if action.ndim > 1:
+            action = action.flatten()
+        
+        # ✅ Ensure we have exactly 4 dimensions
+        if len(action) < 4:
+            # Pad with zeros if action is too short
+            padded_action = np.zeros(4, dtype=np.float32)
+            padded_action[:len(action)] = action
+            action = padded_action
+        elif len(action) > 4:
+            # Truncate if action is too long
+            action = action[:4]
+        
+        # Parse action safely
+        action_type = int(np.clip(action[0], 0, 4))
+        volume = float(np.clip(action[1], 0.01, 0.50))
+        sl_pips = float(np.clip(action[2], 0, 100))
+        recovery_mode = int(np.clip(action[3], 0, 2))
         
         # Execute action with recovery logic
         reward = self._execute_recovery_action(action_type, volume, sl_pips, recovery_mode)

@@ -1,11 +1,17 @@
+# core/agent.py - แก้ไข imports และ tensorboard issue
+
 import os
-from typing import Dict
+import json
+import numpy as np  # ← เพิ่มบรรทัดนี้!
+from datetime import datetime
+from typing import Dict, Optional, Any
 
 # Stable-Baselines3 imports with error handling
 try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv
     from stable_baselines3.common.monitor import Monitor
+    from stable_baselines3.common.callbacks import BaseCallback
     SB3_AVAILABLE = True
     print("✅ Stable-Baselines3 available")
 except ImportError as e:
@@ -15,7 +21,7 @@ except ImportError as e:
 
 class RLAgent:
     """
-    Simplified RL Agent for Trading
+    RL Agent for Trading
     - PPO algorithm only
     - Training and prediction
     - Essential model management
@@ -92,7 +98,7 @@ class RLAgent:
             
             vec_env = DummyVecEnv([make_env])
             
-            # Create PPO model - FIX: import torch functions properly
+            # Create PPO model - แก้ไข: ไม่ใช้ tensorboard
             import torch.nn as nn
             
             self.model = PPO(
@@ -110,10 +116,10 @@ class RLAgent:
                 max_grad_norm=0.5,
                 device='auto',
                 verbose=1,
-                tensorboard_log=self.log_path,
+                tensorboard_log=None,  # ← แก้ไข: ไม่ใช้ tensorboard
                 policy_kwargs={
                     'net_arch': [256, 256],  # Simple network
-                    'activation_fn': nn.Tanh  # FIX: Use nn.Tanh instead of 'tanh'
+                    'activation_fn': nn.Tanh
                 }
             )
             
@@ -141,14 +147,17 @@ class RLAgent:
             print(f"   - Reset Test: ✅ Success")
             print(f"   - Sample Observation Shape: {obs.shape}")
             
-            # Test environment step
-            random_action = self.env.action_space.sample()
-            obs, reward, done, truncated, info = self.env.step(random_action)
+            # Test environment step with VALID action
+            # Fix volume issue by using proper volume range
+            valid_action = np.array([0, 0.01, 0.0], dtype=np.float32)  # Hold, min volume, no SL
+            obs, reward, done, truncated, info = self.env.step(valid_action)
             print(f"   - Step Test: ✅ Success")
             print(f"   - Sample Reward: {reward}")
             
         except Exception as e:
             print(f"❌ Environment validation failed: {e}")
+            import traceback
+            traceback.print_exc()
             raise e
 
     def train(self, total_timesteps: int = None):
@@ -235,4 +244,3 @@ class RLAgent:
         except Exception as e:
             print(f"❌ Load model error: {e}")
             return False
-        

@@ -48,11 +48,7 @@ class Environment(gym.Env):
         self.total_trades = 0
         self.winning_trades = 0
         
-        print("✅ Environment initialized:")
-        print(f"   - Symbol: {self.symbol}")
-        print(f"   - Observation Space: {self.observation_space.shape[0]} features")
-        print(f"   - Action Space: {self.action_space.shape[0]} dimensions")
-        print(f"   - Max Positions: {self.max_positions}")
+        self.is_training_mode = config.get('training_mode', True)
 
     def reset(self, seed=None, options=None):
         """Reset environment to initial state"""
@@ -126,7 +122,11 @@ class Environment(gym.Env):
                 obs[0] = (prices[-1] - prices[0]) / prices[0]  # Price change
                 obs[1] = (max(prices) - min(prices)) / prices[0]  # Range
                 obs[2] = np.std(prices) / np.mean(prices)  # Volatility
-                obs[3] = (prices[-1] - np.mean(prices)) / np.std(prices)  # Z-score
+                std_val = np.std(prices)
+                if std_val > 0:
+                    obs[3] = (prices[-1] - np.mean(prices)) / std_val
+                else:
+                    obs[3] = 0.0  # ถ้าราคาไม่เปลี่ยน = neutral
                 obs[4] = 1.0 if prices[-1] > prices[-2] else -1.0  # Direction
                 
                 # indicators
@@ -232,34 +232,54 @@ class Environment(gym.Env):
     def _execute_buy(self, volume, stop_loss):
         """Execute buy order"""
         try:
-            # Check position limits
-            positions = self.mt5_interface.get_positions()
-            if len(positions) >= self.max_positions:
-                return -0.5  # Penalty for hitting limits
-            
-            # Get current price
-            price_info = self.mt5_interface.get_current_price(self.symbol)
-            if not price_info:
-                return -1.0
-            
-            price = price_info['ask']
-            sl_price = price * (1 - stop_loss) if stop_loss > 0 else None
-            
-            # Place order
-            success = self.mt5_interface.place_order(
-                symbol=self.symbol,
-                order_type='buy',
-                volume=volume,
-                price=price,
-                sl=sl_price
-            )
-            
-            if success:
-                self.total_trades += 1
-                return 1.0  # Reward for successful trade
-            else:
-                return -0.5  # Penalty for failed trade
+            # ✅ Training Mode - จำลองผลลัพธ์
+            if self.is_training_mode:
+                # จำลองการซื้อ ไม่เรียก MT5 จริง
+                import random
                 
+                # จำลอง position limits
+                simulated_positions = getattr(self, '_sim_positions', 0)
+                if simulated_positions >= self.max_positions:
+                    return -0.5  # Penalty for hitting limits
+                
+                # จำลองความสำเร็จ (80% success rate)
+                if random.random() < 0.8:
+                    self.total_trades += 1
+                    self._sim_positions = simulated_positions + 1
+                    return 1.0  # Reward for successful trade
+                else:
+                    return -0.5  # Penalty for failed trade
+            
+            # ✅ Live Trading Mode - เรียก MT5 จริง
+            else:
+                # Check position limits
+                positions = self.mt5_interface.get_positions()
+                if len(positions) >= self.max_positions:
+                    return -0.5  # Penalty for hitting limits
+                
+                # Get current price
+                price_info = self.mt5_interface.get_current_price(self.symbol)
+                if not price_info:
+                    return -1.0
+                
+                price = price_info['ask']
+                sl_price = price * (1 - stop_loss) if stop_loss > 0 else None
+                
+                # Place order
+                success = self.mt5_interface.place_order(
+                    symbol=self.symbol,
+                    order_type='buy',
+                    volume=volume,
+                    price=price,
+                    sl=sl_price
+                )
+                
+                if success:
+                    self.total_trades += 1
+                    return 1.0  # Reward for successful trade
+                else:
+                    return -0.5  # Penalty for failed trade
+                    
         except Exception as e:
             print(f"Buy execution error: {e}")
             return -1.0
@@ -267,34 +287,54 @@ class Environment(gym.Env):
     def _execute_sell(self, volume, stop_loss):
         """Execute sell order"""
         try:
-            # Check position limits
-            positions = self.mt5_interface.get_positions()
-            if len(positions) >= self.max_positions:
-                return -0.5
-            
-            # Get current price
-            price_info = self.mt5_interface.get_current_price(self.symbol)
-            if not price_info:
-                return -1.0
-            
-            price = price_info['bid']
-            sl_price = price * (1 + stop_loss) if stop_loss > 0 else None
-            
-            # Place order
-            success = self.mt5_interface.place_order(
-                symbol=self.symbol,
-                order_type='sell',
-                volume=volume,
-                price=price,
-                sl=sl_price
-            )
-            
-            if success:
-                self.total_trades += 1
-                return 1.0
-            else:
-                return -0.5
+            # ✅ Training Mode - จำลองผลลัพธ์
+            if self.is_training_mode:
+                # จำลองการขาย ไม่เรียก MT5 จริง
+                import random
                 
+                # จำลอง position limits
+                simulated_positions = getattr(self, '_sim_positions', 0)
+                if simulated_positions >= self.max_positions:
+                    return -0.5  # Penalty for hitting limits
+                
+                # จำลองความสำเร็จ (80% success rate)
+                if random.random() < 0.8:
+                    self.total_trades += 1
+                    self._sim_positions = simulated_positions + 1
+                    return 1.0  # Reward for successful trade
+                else:
+                    return -0.5  # Penalty for failed trade
+            
+            # ✅ Live Trading Mode - เรียก MT5 จริง
+            else:
+                # Check position limits
+                positions = self.mt5_interface.get_positions()
+                if len(positions) >= self.max_positions:
+                    return -0.5
+                
+                # Get current price
+                price_info = self.mt5_interface.get_current_price(self.symbol)
+                if not price_info:
+                    return -1.0
+                
+                price = price_info['bid']
+                sl_price = price * (1 + stop_loss) if stop_loss > 0 else None
+                
+                # Place order
+                success = self.mt5_interface.place_order(
+                    symbol=self.symbol,
+                    order_type='sell',
+                    volume=volume,
+                    price=price,
+                    sl=sl_price
+                )
+                
+                if success:
+                    self.total_trades += 1
+                    return 1.0
+                else:
+                    return -0.5
+                    
         except Exception as e:
             print(f"Sell execution error: {e}")
             return -1.0
@@ -302,31 +342,52 @@ class Environment(gym.Env):
     def _close_all_positions(self):
         """Close all open positions"""
         try:
-            positions = self.mt5_interface.get_positions()
-            if not positions:
-                return -0.1  # Small penalty for unnecessary action
-            
-            closed_count = 0
-            total_profit = 0
-            
-            for pos in positions:
-                ticket = pos.get('ticket')
-                profit = pos.get('profit', 0)
+            # ✅ Training Mode - จำลองผลลัพธ์
+            if self.is_training_mode:
+                simulated_positions = getattr(self, '_sim_positions', 0)
+                if simulated_positions == 0:
+                    return -0.1  # Small penalty for unnecessary action
                 
-                if self.mt5_interface.close_position(ticket):
-                    closed_count += 1
-                    total_profit += profit
-                    if profit > 0:
-                        self.winning_trades += 1
-            
-            # Reward based on profit and closure success
-            if closed_count > 0:
+                # จำลองการปิด positions
+                import random
+                total_profit = random.uniform(-50, 100)  # จำลองกำไร/ขาดทุน
+                
+                self._sim_positions = 0  # ปิดหมด
+                
+                if total_profit > 0:
+                    self.winning_trades += 1
+                
                 base_reward = 2.0  # Reward for cleaning up
                 profit_reward = total_profit / 100  # Normalize profit
                 return base_reward + profit_reward
+            
+            # ✅ Live Trading Mode - เรียก MT5 จริง
             else:
-                return -1.0  # Penalty for failed closures
+                positions = self.mt5_interface.get_positions()
+                if not positions:
+                    return -0.1  # Small penalty for unnecessary action
                 
+                closed_count = 0
+                total_profit = 0
+                
+                for pos in positions:
+                    ticket = pos.get('ticket')
+                    profit = pos.get('profit', 0)
+                    
+                    if self.mt5_interface.close_position(ticket):
+                        closed_count += 1
+                        total_profit += profit
+                        if profit > 0:
+                            self.winning_trades += 1
+                
+                # Reward based on profit and closure success
+                if closed_count > 0:
+                    base_reward = 2.0  # Reward for cleaning up
+                    profit_reward = total_profit / 100  # Normalize profit
+                    return base_reward + profit_reward
+                else:
+                    return -1.0  # Penalty for failed closures
+                    
         except Exception as e:
             print(f"Close all error: {e}")
             return -1.0
@@ -420,3 +481,12 @@ class Environment(gym.Env):
                 'win_rate': 0,
                 'max_drawdown': 0
             }
+        
+    def set_training_mode(self, is_training: bool):
+        """Set training mode"""
+        self.is_training_mode = is_training
+        if is_training:
+            print("🎓 Environment set to TRAINING mode (simulation)")
+            self._sim_positions = 0  # Reset simulated positions
+        else:
+            print("🚀 Environment set to LIVE TRADING mode")

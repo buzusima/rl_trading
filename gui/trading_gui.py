@@ -340,9 +340,12 @@ class TradingGUI:
             self.log_message(f"🚀 Training for {training_steps} steps...", "INFO")
             
             # Note: This would need the train method to be implemented in BasicRLAgent
-            # self.agent.train(total_timesteps=training_steps)
+            success = self.agent.train(total_timesteps=training_steps)
             
-            self.log_message("✅ Training completed successfully", "SUCCESS")
+            if success:
+                model_path = self.agent.save_model()
+                if model_path:
+                    self.log_message(f"💾 Model saved: {model_path}", "SUCCESS")
             
         except Exception as e:
             self.log_message(f"❌ Training error: {e}", "ERROR")

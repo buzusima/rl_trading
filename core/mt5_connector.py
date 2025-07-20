@@ -447,7 +447,7 @@ class MT5Connector:
                 return False
                 
             # Try to get a price quote
-            current_price = self.get_current_price("XAUUSD")
+            current_price = self.get_current_price("XAUUSD.v")
             if not current_price:
                 return False
                 

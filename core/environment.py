@@ -47,9 +47,11 @@ class Environment(gym.Env):
         )
         
         # === ACTION SPACE (4 dimensions for recovery) ===
+        # ✅ Fixed: Use proper dtypes and ranges
         self.action_space = spaces.Box(
-            low=np.array([0, 0.01, 0, 0]),           # [action, volume, sl_pips, recovery_mode]
-            high=np.array([4, 0.50, 100, 2]),        # [HOLD/BUY/SELL/CLOSE/RECOVERY, max_vol, sl, recovery_type]
+            low=np.array([0, 0.01, 0, 0], dtype=np.float32),           
+            high=np.array([4, 0.50, 100, 2], dtype=np.float32),        
+            shape=(4,),
             dtype=np.float32
         )
         

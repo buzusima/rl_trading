@@ -1,3 +1,5 @@
+# core/data_loader.py - Historical Data Loader for M5 XAUUSD
+
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
@@ -18,7 +20,7 @@ class HistoricalDataLoader:
         print("📥 Initializing Historical Data Loader...")
         
         self.mt5_interface = mt5_interface
-        self.symbol = "XAUUSD"
+        self.symbol = "XAUUSD.v"  # ✅ Updated to correct symbol
         self.timeframe = mt5.TIMEFRAME_M5
         self.lookback_years = 2
         
@@ -29,20 +31,21 @@ class HistoricalDataLoader:
         
         # File paths
         self.data_dir = os.path.abspath('data')
-        self.raw_data_file = os.path.join(self.data_dir, 'xauusd_m5_raw.pkl')
-        self.processed_data_file = os.path.join(self.data_dir, 'xauusd_m5_processed.pkl')
+        self.raw_data_file = os.path.join(self.data_dir, 'xauusd_v_m5_raw.pkl')  # ✅ Updated filename
+        self.processed_data_file = os.path.join(self.data_dir, 'xauusd_v_m5_processed.pkl')  # ✅ Updated filename
         
         # Create data directory
         os.makedirs(self.data_dir, exist_ok=True)
         
         print("✅ Data Loader initialized")
         print(f"   - Symbol: {self.symbol}")
-        print(f"   - Timeframe: M5")
+        print(f"   - Timeframe: M5") 
         print(f"   - Lookback: {self.lookback_years} years")
         print(f"   - Data Dir: {self.data_dir}")
+        print(f"   - Using XAUUSD.v (Correct Symbol)")  # ✅ Confirmation message
 
     def download_historical_data(self, force_download=False):
-        """Download M5 XAUUSD data for last 2 years"""
+        """Download M5 XAUUSD data for last 2 years with smart symbol detection"""
         try:
             # Check if data already exists
             if os.path.exists(self.raw_data_file) and not force_download:
@@ -56,20 +59,22 @@ class HistoricalDataLoader:
                 print("❌ MT5 not connected")
                 return False
             
-            # Calculate date range
+            # ✅ Smart symbol detection
+            correct_symbol = self._find_correct_symbol()
+            if not correct_symbol:
+                print("❌ Cannot find valid Gold symbol")
+                return False
+            
+            print(f"✅ Using symbol: {correct_symbol}")
+            
+            # ✅ Adjusted date range (avoid future dates)
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=self.lookback_years * 365)
+            start_date = end_date - timedelta(days=min(730, 365))  # Max 2 years or 1 year
             
             print(f"📅 Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
             
-            # Download data
-            print("⬇️ Downloading M5 data...")
-            rates = mt5.copy_rates_range(
-                self.symbol,
-                self.timeframe,
-                start_date,
-                end_date
-            )
+            # ✅ Try different timeframes if M5 fails
+            rates = self._download_with_fallback(correct_symbol, start_date, end_date)
             
             if rates is None or len(rates) == 0:
                 print("❌ No data received from MT5")
@@ -81,7 +86,7 @@ class HistoricalDataLoader:
             df.set_index('time', inplace=True)
             
             # Basic data info
-            print(f"✅ Downloaded {len(df)} M5 candles")
+            print(f"✅ Downloaded {len(df)} candles")
             print(f"   - Period: {df.index[0]} to {df.index[-1]}")
             print(f"   - Data size: {len(df):,} rows")
             print(f"   - Approximate trading days: {len(df) / 288:.0f}")
@@ -95,6 +100,96 @@ class HistoricalDataLoader:
         except Exception as e:
             print(f"❌ Download error: {e}")
             return False
+
+    def _find_correct_symbol(self):
+        """Find correct Gold symbol in MT5"""
+        try:
+            # Common Gold symbol variations
+            symbol_candidates = [
+                "XAUUSD",
+                "XAUUSD.raw", 
+                "XAUUSD.m",
+                "XAUUSD.c",
+                "GOLD",
+                "GOLD.m",
+                "XAU/USD",
+                "Gold"
+            ]
+            
+            print("🔍 Searching for Gold symbol...")
+            
+            for symbol in symbol_candidates:
+                try:
+                    # Test if symbol exists and has data
+                    tick = mt5.symbol_info_tick(symbol)
+                    if tick is not None:
+                        print(f"✅ Found working symbol: {symbol}")
+                        return symbol
+                except:
+                    continue
+            
+            # If no predefined symbol works, search through all symbols
+            print("🔍 Searching through all symbols...")
+            symbols = mt5.symbols_get()
+            if symbols:
+                for symbol in symbols:
+                    symbol_name = symbol.name.upper()
+                    if 'XAU' in symbol_name or 'GOLD' in symbol_name:
+                        try:
+                            tick = mt5.symbol_info_tick(symbol.name)
+                            if tick is not None:
+                                print(f"✅ Found working symbol: {symbol.name}")
+                                return symbol.name
+                        except:
+                            continue
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ Symbol search error: {e}")
+            return None
+
+    def _download_with_fallback(self, symbol, start_date, end_date):
+        """Download data with timeframe fallback"""
+        try:
+            # Try M5 first
+            print("⬇️ Trying M5 data...")
+            rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, start_date, end_date)
+            
+            if rates is not None and len(rates) > 1000:  # Need reasonable amount of data
+                print(f"✅ M5 data successful: {len(rates)} candles")
+                return rates
+            
+            # Fallback to M15
+            print("⬇️ M5 failed, trying M15 data...")
+            rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M15, start_date, end_date)
+            
+            if rates is not None and len(rates) > 500:
+                print(f"✅ M15 data successful: {len(rates)} candles")
+                return rates
+            
+            # Fallback to H1
+            print("⬇️ M15 failed, trying H1 data...")
+            rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_H1, start_date, end_date)
+            
+            if rates is not None and len(rates) > 100:
+                print(f"✅ H1 data successful: {len(rates)} candles")
+                return rates
+            
+            # Try shorter period if still failing
+            print("⬇️ Trying shorter period (3 months)...")
+            shorter_start = end_date - timedelta(days=90)
+            rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, shorter_start, end_date)
+            
+            if rates is not None and len(rates) > 100:
+                print(f"✅ Short period M5 successful: {len(rates)} candles")
+                return rates
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ Download with fallback error: {e}")
+            return None
 
     def calculate_indicators(self):
         """Calculate technical indicators for the data"""

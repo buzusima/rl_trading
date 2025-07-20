@@ -342,3 +342,6 @@ class RLAgent:
             "observation_space": str(self.env.observation_space.shape),
             "action_space": str(self.env.action_space.shape)
         }
+
+# Compatibility alias
+MT5Interface = None  # Remove this line from original

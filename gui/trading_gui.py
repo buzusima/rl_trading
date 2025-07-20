@@ -23,6 +23,9 @@ class TradingGUI:
         self.root.geometry("900x700")
         self.root.configure(bg='#2b2b2b')
         
+        # ✅ Configure Thai fonts for better readability
+        self.setup_fonts()
+        
         # System state
         self.is_connected = False
         self.is_training = False
@@ -54,6 +57,77 @@ class TradingGUI:
         
         print("✅ Recovery Trading GUI initialized successfully")
 
+    def setup_fonts(self):
+        """Setup Thai-friendly fonts"""
+        import tkinter.font as tkFont
+        
+        # ✅ Thai-friendly fonts in order of preference
+        thai_fonts = [
+            ("Segoe UI", 10),           # Windows default - good Thai support
+            ("Tahoma", 10),             # Excellent Thai support
+            ("Microsoft Sans Serif", 10), # Windows fallback
+            ("DejaVu Sans", 10),        # Linux
+            ("SF Pro Display", 10),     # macOS
+            ("Arial Unicode MS", 10),   # Universal fallback
+            ("TkDefaultFont", 10)       # System default
+        ]
+        
+        # Find the best available font
+        self.default_font = None
+        for font_name, size in thai_fonts:
+            try:
+                test_font = tkFont.Font(family=font_name, size=size)
+                # Test if font exists by getting metrics
+                test_font.metrics()
+                self.default_font = (font_name, size)
+                print(f"✅ Using font: {font_name}")
+                break
+            except:
+                continue
+        
+        if not self.default_font:
+            self.default_font = ("TkDefaultFont", 10)
+            print("⚠️ Using system default font")
+        
+        # ✅ Create font objects for different UI elements (fixed for Python 3.8)
+        font_family, base_size = self.default_font
+        
+        # Console font with fallback handling for older Python
+        console_fonts = ['Consolas', 'Courier New', 'monospace', 'TkFixedFont']
+        console_font_family = 'TkFixedFont'  # Default fallback
+        
+        for font_name in console_fonts:
+            try:
+                test_font = tkFont.Font(family=font_name, size=9)
+                test_font.metrics()
+                console_font_family = font_name
+                break
+            except:
+                continue
+        
+        self.fonts = {
+            'default': tkFont.Font(family=font_family, size=base_size),
+            'header': tkFont.Font(family=font_family, size=base_size+2, weight='bold'),
+            'small': tkFont.Font(family=font_family, size=base_size-1),
+            'console': tkFont.Font(family=console_font_family, size=9),  # Fixed: removed fallback parameter
+            'thai_label': tkFont.Font(family=font_family, size=base_size+1),  # Slightly larger for Thai
+            'thai_comment': tkFont.Font(family=font_family, size=base_size-1)  # For comments
+        }
+        
+        # ✅ Configure ttk styles for better Thai rendering
+        style = ttk.Style()
+        
+        # Configure label styles
+        style.configure('Thai.TLabel', font=self.fonts['thai_label'])
+        style.configure('Comment.TLabel', font=self.fonts['thai_comment'], foreground='gray')
+        style.configure('Header.TLabel', font=self.fonts['header'])
+        
+        # Configure button styles  
+        style.configure('Thai.TButton', font=self.fonts['default'])
+        
+        # Configure entry styles
+        style.configure('Thai.TEntry', font=self.fonts['default'])
+
     def initialize_variables(self):
         """Initialize all GUI variables"""
         # Basic config variables
@@ -75,14 +149,14 @@ class TradingGUI:
     def load_config(self):
         """Load configuration including recovery settings"""
         default_config = {
-            'symbol': 'XAUUSD',
-            'lot_size': 0.01,
-            'max_positions': 5,
+            'symbol': 'XAUUSD.v',  # ✅ Updated to correct symbol
+            'lot_size': 0.02,      # ✅ Updated for $4000 account
+            'max_positions': 3,
             'training_steps': 10000,
             'learning_rate': 0.0003,
             # Recovery settings
-            'recovery_multiplier': 1.5,
-            'recovery_threshold': -20.0,
+            'recovery_multiplier': 1.4,     # ✅ Updated for $4000 account
+            'recovery_threshold': -35.0,    # ✅ Updated for $4000 account  
             'max_recovery_levels': 3
             # Removed max_drawdown_limit
         }
@@ -274,27 +348,27 @@ class TradingGUI:
         recovery_grid.pack(fill='x', padx=10, pady=10)
         
         # Recovery multiplier
-        ttk.Label(recovery_grid, text="Recovery Multiplier:").grid(row=0, column=0, sticky='w')
-        recovery_mult_entry = ttk.Entry(recovery_grid, textvariable=self.recovery_multiplier_var, width=10)
+        ttk.Label(recovery_grid, text="Recovery Multiplier:", style='Thai.TLabel').grid(row=0, column=0, sticky='w')
+        recovery_mult_entry = ttk.Entry(recovery_grid, textvariable=self.recovery_multiplier_var, width=10, style='Thai.TEntry')
         recovery_mult_entry.grid(row=0, column=1, sticky='w', padx=(10, 0))
-        ttk.Label(recovery_grid, text="(1.5 = เพิ่ม lot 1.5 เท่า)").grid(row=0, column=2, sticky='w', padx=(5, 0))
+        ttk.Label(recovery_grid, text="(1.5 = เพิ่ม lot 1.5 เท่า)", style='Comment.TLabel').grid(row=0, column=2, sticky='w', padx=(5, 0))
         
         # Recovery threshold
-        ttk.Label(recovery_grid, text="Recovery Threshold:").grid(row=1, column=0, sticky='w')
-        recovery_thresh_entry = ttk.Entry(recovery_grid, textvariable=self.recovery_threshold_var, width=10)
+        ttk.Label(recovery_grid, text="Recovery Threshold:", style='Thai.TLabel').grid(row=1, column=0, sticky='w')
+        recovery_thresh_entry = ttk.Entry(recovery_grid, textvariable=self.recovery_threshold_var, width=10, style='Thai.TEntry')
         recovery_thresh_entry.grid(row=1, column=1, sticky='w', padx=(10, 0))
-        ttk.Label(recovery_grid, text="($ ขาดทุนเท่าไหร่เริ่มแก้ไม้)").grid(row=1, column=2, sticky='w', padx=(5, 0))
+        ttk.Label(recovery_grid, text="($ ขาดทุนเท่าไหร่เริ่มแก้ไม้)", style='Comment.TLabel').grid(row=1, column=2, sticky='w', padx=(5, 0))
         
         # Max recovery levels
-        ttk.Label(recovery_grid, text="Max Recovery Levels:").grid(row=2, column=0, sticky='w')
-        max_recovery_entry = ttk.Entry(recovery_grid, textvariable=self.max_recovery_levels_var, width=10)
+        ttk.Label(recovery_grid, text="Max Recovery Levels:", style='Thai.TLabel').grid(row=2, column=0, sticky='w')
+        max_recovery_entry = ttk.Entry(recovery_grid, textvariable=self.max_recovery_levels_var, width=10, style='Thai.TEntry')
         max_recovery_entry.grid(row=2, column=1, sticky='w', padx=(10, 0))
-        ttk.Label(recovery_grid, text="(แก้ไม้สูงสุดกี่ระดับ)").grid(row=2, column=2, sticky='w', padx=(5, 0))
+        ttk.Label(recovery_grid, text="(แก้ไม้สูงสุดกี่ระดับ)", style='Comment.TLabel').grid(row=2, column=2, sticky='w', padx=(5, 0))
         
         # Note about no drawdown limit
-        ttk.Label(recovery_grid, text="Drawdown Limit:").grid(row=3, column=0, sticky='w')
-        ttk.Label(recovery_grid, text="🚀 UNLIMITED", foreground='blue').grid(row=3, column=1, sticky='w', padx=(10, 0))
-        ttk.Label(recovery_grid, text="(ไม่มีการหยุดเทรด - แก้ไม้ไม่จำกัด)").grid(row=3, column=2, sticky='w', padx=(5, 0))
+        ttk.Label(recovery_grid, text="Drawdown Limit:", style='Thai.TLabel').grid(row=3, column=0, sticky='w')
+        ttk.Label(recovery_grid, text="🚀 UNLIMITED", foreground='blue', style='Header.TLabel').grid(row=3, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(recovery_grid, text="(ไม่มีการหยุดเทรด - แก้ไม้ไม่จำกัด)", style='Comment.TLabel').grid(row=3, column=2, sticky='w', padx=(5, 0))
         
         # === DATA SETTINGS SECTION ===
         data_frame = ttk.LabelFrame(self.training_frame, text="📊 Historical Data Settings")
@@ -312,22 +386,22 @@ class TradingGUI:
         ttk.Label(data_grid, text="2 Years", foreground='blue').grid(row=1, column=1, sticky='w', padx=(10, 0))
         
         # Indicators (readonly)
-        ttk.Label(data_grid, text="Indicators:").grid(row=2, column=0, sticky='w')
+        ttk.Label(data_grid, text="Indicators:", style='Thai.TLabel').grid(row=2, column=0, sticky='w')
         indicators_text = "SMA20, SMA50, EMA12, EMA26, RSI14, MACD, BB, ATR14"
-        ttk.Label(data_grid, text=indicators_text, foreground='blue').grid(row=2, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(data_grid, text=indicators_text, foreground='blue', style='Comment.TLabel').grid(row=2, column=1, sticky='w', padx=(10, 0))
         
         # Data cache status
-        ttk.Label(data_grid, text="Cache Status:").grid(row=3, column=0, sticky='w')
-        self.cache_status_label = ttk.Label(data_grid, text="Not checked", foreground='orange')
+        ttk.Label(data_grid, text="Cache Status:", style='Thai.TLabel').grid(row=3, column=0, sticky='w')
+        self.cache_status_label = ttk.Label(data_grid, text="Not checked", foreground='orange', style='Comment.TLabel')
         self.cache_status_label.grid(row=3, column=1, sticky='w', padx=(10, 0))
         
-        # Cache refresh button
+        # Cache refresh button with Thai-friendly style
         self.refresh_cache_btn = ttk.Button(data_grid, text="🔄 Refresh Data Cache", 
-                                           command=self.refresh_data_cache)
+                                           command=self.refresh_data_cache, style='Thai.TButton')
         self.refresh_cache_btn.grid(row=3, column=2, sticky='w', padx=(10, 0))
         
-        # Save config button
-        save_config_btn = ttk.Button(config_grid, text="💾 Save Config", command=self.save_config)
+        # Save config button with Thai-friendly style
+        save_config_btn = ttk.Button(config_grid, text="💾 Save Config", command=self.save_config, style='Thai.TButton')
         save_config_btn.grid(row=5, column=0, columnspan=3, pady=10)
         
         # === TRAINING CONTROLS SECTION ===
@@ -337,22 +411,22 @@ class TradingGUI:
         training_controls = ttk.Frame(training_ctrl_frame)
         training_controls.pack(fill='x', padx=10, pady=10)
         
-        # Training buttons
+        # Training buttons with Thai-friendly style
         self.start_training_btn = ttk.Button(training_controls, text="🚀 Start Recovery Training", 
-                                            command=self.start_training)
+                                            command=self.start_training, style='Thai.TButton')
         self.start_training_btn.pack(side='left', padx=5)
         
         self.stop_training_btn = ttk.Button(training_controls, text="⏹️ Stop Training", 
-                                           command=self.stop_training, state='disabled')
+                                           command=self.stop_training, state='disabled', style='Thai.TButton')
         self.stop_training_btn.pack(side='left', padx=5)
         
-        # Load model button
+        # Load model button with Thai-friendly style
         load_model_training_btn = ttk.Button(training_controls, text="📥 Load Model", 
-                                           command=self.manual_load_model)
+                                           command=self.manual_load_model, style='Thai.TButton')
         load_model_training_btn.pack(side='left', padx=5)
         
-        # Training status
-        self.training_status_label = ttk.Label(training_controls, text="Ready for Recovery Training")
+        # Training status with Thai-friendly font
+        self.training_status_label = ttk.Label(training_controls, text="Ready for Recovery Training", style='Thai.TLabel')
         self.training_status_label.pack(side='right')
 
     def setup_logs_tab(self):
@@ -361,8 +435,8 @@ class TradingGUI:
         log_frame = ttk.Frame(self.logs_frame)
         log_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Log text with scrollbar
-        self.log_text = tk.Text(log_frame, bg='#1e1e1e', fg='white', font=('Consolas', 9))
+        # Log text with scrollbar and Thai-friendly font
+        self.log_text = tk.Text(log_frame, bg='#1e1e1e', fg='white', font=self.fonts['console'])
         log_scrollbar = ttk.Scrollbar(log_frame, orient='vertical', command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         

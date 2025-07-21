@@ -5,6 +5,7 @@ import json
 import os
 from datetime import datetime
 import numpy as np  # ⭐ เพิ่มบรรทัดนี้
+from environments import ConservativeEnvironment, AggressiveEnvironment, create_environment
 
 class TradingGUI:
     
@@ -163,6 +164,11 @@ class TradingGUI:
         # Auto-scroll variable (เดิม)
         self.auto_scroll_var = tk.BooleanVar(value=True)
     
+        # ⭐ เพิ่ม Trading Mode Variables
+        self.trading_mode_var = tk.StringVar(value="conservative")  # Default: Conservative
+        self.current_environment_type = "conservative"
+        self.ai_insights_window = None
+
     def load_config(self):
         """Load configuration รวม Risk Management settings"""
         default_config = {
@@ -218,8 +224,63 @@ class TradingGUI:
         self.setup_logs_tab()
 
     def setup_main_tab(self):
-        """Setup main control tab with recovery status"""
-        # === CONNECTION SECTION ===
+        # === TRADING MODE SECTION === (เพิ่มใหม่)
+        mode_frame = ttk.LabelFrame(self.main_frame, text="🎯 Trading Mode Selection")
+        mode_frame.pack(fill='x', padx=10, pady=5)
+        
+        mode_controls = ttk.Frame(mode_frame)
+        mode_controls.pack(fill='x', padx=10, pady=10)
+        
+        # Mode Radio Buttons
+        conservative_radio = ttk.Radiobutton(
+            mode_controls, 
+            text="🛡️ Conservative Mode", 
+            variable=self.trading_mode_var, 
+            value="conservative",
+            command=self.on_mode_change,
+            style='Thai.TButton'
+        )
+        conservative_radio.pack(side='left', padx=5)
+        
+        aggressive_radio = ttk.Radiobutton(
+            mode_controls, 
+            text="⚡ Aggressive AI Mode", 
+            variable=self.trading_mode_var, 
+            value="aggressive",
+            command=self.on_mode_change,
+            style='Thai.TButton'
+        )
+        aggressive_radio.pack(side='left', padx=5)
+        
+        # Mode Description
+        mode_desc_frame = ttk.Frame(mode_frame)
+        mode_desc_frame.pack(fill='x', padx=10, pady=(0, 10))
+        
+        self.mode_description_label = ttk.Label(
+            mode_desc_frame, 
+            text="🛡️ Conservative: ใช้ RL Agent เดิม (HOLD บ่อย, ปลอดภัย)",
+            style='Comment.TLabel'
+        )
+        self.mode_description_label.pack(side='left')
+        
+        # AI Insights Button (เฉพาะ Aggressive Mode)
+        self.ai_insights_btn = ttk.Button(
+            mode_controls, 
+            text="🧠 AI Insights", 
+            command=self.show_ai_insights,
+            state='disabled',  # เปิดเฉพาะ Aggressive Mode
+            style='Thai.TButton'
+        )
+        self.ai_insights_btn.pack(side='right', padx=5)
+        
+        # Current Environment Status
+        env_status_frame = ttk.Frame(mode_frame)
+        env_status_frame.pack(fill='x', padx=10, pady=(0, 10))
+        
+        ttk.Label(env_status_frame, text="Current Environment:", style='Thai.TLabel').pack(side='left')
+        self.current_env_label = ttk.Label(env_status_frame, text="Conservative", foreground='blue', style='Thai.TLabel')
+        self.current_env_label.pack(side='left', padx=(10, 0))
+            # === CONNECTION SECTION ===
         conn_frame = ttk.LabelFrame(self.main_frame, text="🔗 MT5 Connection")
         conn_frame.pack(fill='x', padx=10, pady=5)
         
@@ -326,6 +387,56 @@ class TradingGUI:
         self.emergency_stop_btn = ttk.Button(trading_controls, text="🛑 EMERGENCY STOP", 
                                             command=self.emergency_stop)
         self.emergency_stop_btn.pack(side='right', padx=5)
+
+    def on_mode_change(self):
+        """เมื่อเปลี่ยน Trading Mode"""
+        try:
+            new_mode = self.trading_mode_var.get()
+            
+            if new_mode == self.current_environment_type:
+                return  # ไม่เปลี่ยน
+            
+            self.log_message(f"🔄 Switching to {new_mode.upper()} mode...", "INFO")
+            
+            # อัปเดต UI
+            self._update_mode_ui(new_mode)
+            
+            # หยุดการเทรดก่อน (ถ้ากำลังเทรด)
+            if self.is_trading:
+                self.log_message("⏹️ Stopping current trading session...", "WARNING")
+                self.stop_trading()
+            
+            # เปลี่ยน Environment (จะทำตอน start trading)
+            self.current_environment_type = new_mode
+            self.environment = None  # รีเซ็ต environment
+            
+            self.log_message(f"✅ Mode changed to {new_mode.upper()}", "SUCCESS")
+            
+        except Exception as e:
+            self.log_message(f"❌ Mode change error: {e}", "ERROR")
+
+    def _update_mode_ui(self, mode):
+        """อัปเดต UI ตาม mode"""
+        try:
+            if mode == "conservative":
+                # Conservative Mode UI
+                self.mode_description_label.config(
+                    text="🛡️ Conservative: ใช้ RL Agent เดิม (HOLD บ่อย, ปลอดภัย)"
+                )
+                self.current_env_label.config(text="Conservative", foreground='blue')
+                self.ai_insights_btn.config(state='disabled')
+                
+            elif mode == "aggressive":
+                # Aggressive Mode UI
+                self.mode_description_label.config(
+                    text="⚡ Aggressive: ใช้ AI Recovery Brain (เทรดมาก, แก้ไม้อัจฉริยะ)"
+                )
+                self.current_env_label.config(text="Aggressive AI", foreground='red')
+                self.ai_insights_btn.config(state='normal')
+                
+        except Exception as e:
+            self.log_message(f"❌ Update mode UI error: {e}", "ERROR")
+
 
     def setup_training_tab(self):
         """Setup training controls tab with recovery settings"""
@@ -568,7 +679,7 @@ class TradingGUI:
     def initialize_trading_system(self):
         """Initialize environment and try to load existing model"""
         try:
-            self.log_message("🏗️ Initializing recovery trading system...", "INFO")
+            self.log_message("🏗️ Initializing trading system...", "INFO")
             
             # Initialize data loader with Smart Cache
             from core.data_loader import HistoricalDataLoader
@@ -584,12 +695,35 @@ class TradingGUI:
             # Update cache status display
             self.update_cache_status()
             
-            # Create environment
-            from core.environment import Environment
-            self.environment = Environment(self.mt5_interface, self.config)
-            self.log_message("✅ Recovery environment created", "SUCCESS")
+            # ⭐ Create Environment ตาม Mode ที่เลือก
+            mode = self.current_environment_type
+            self.log_message(f"🎯 Creating {mode.upper()} environment...", "INFO")
             
-            # Create agent
+            self.environment = create_environment(mode, self.mt5_interface, self.config)
+            
+            if self.environment:
+                self.log_message(f"✅ {mode.upper()} environment created", "SUCCESS")
+                
+                # แสดงข้อมูล environment
+                env_type = getattr(self.environment, '__class__.__name__', 'Unknown')
+                self.log_message(f"   - Environment Type: {env_type}", "INFO")
+                
+                if mode == "aggressive":
+                    # แสดงข้อมูล AI Brain
+                    try:
+                        ai_status = self.environment.get_ai_status()
+                        if ai_status:
+                            self.log_message("   - AI Recovery Brain: Active", "SUCCESS")
+                            session_info = ai_status.get('session', {})
+                            if session_info:
+                                self.log_message(f"   - AI Session ID: {session_info.get('id', 'Unknown')}", "INFO")
+                    except:
+                        pass
+            else:
+                self.log_message(f"❌ Failed to create {mode} environment", "ERROR")
+                return
+            
+            # Create agent (ใช้เดิม)
             from core.rl_agent import RLAgent
             self.agent = RLAgent(self.environment, self.config)
             self.log_message("✅ RL agent created", "SUCCESS")
@@ -599,6 +733,7 @@ class TradingGUI:
             
         except Exception as e:
             self.log_message(f"❌ System initialization error: {e}", "ERROR")
+                        
 
     def auto_load_model(self):
         """Automatically try to load the latest saved model"""
@@ -674,14 +809,22 @@ class TradingGUI:
                 messagebox.showwarning("Warning", "Please connect to MT5 first")
                 return
                 
-            if self.agent is None:
+            if self.environment is None:
                 self.initialize_trading_system()
             
-            self.log_message("🎓 Starting recovery training...", "INFO")
+            # ตรวจสอบ mode
+            mode_name = self.current_environment_type.upper()
+            self.log_message(f"🎓 Starting {mode_name} training...", "INFO")
+            
+            # แสดงข้อมูล environment
+            if hasattr(self.environment, '__class__'):
+                env_class = self.environment.__class__.__name__
+                self.log_message(f"   Using: {env_class}", "INFO")
+            
             self.is_training = True
             self.start_training_btn.config(state='disabled')
             self.stop_training_btn.config(state='normal')
-            self.training_status_label.config(text="Training...")
+            self.training_status_label.config(text=f"Training {mode_name}...")
             
             # Start training in separate thread
             self.training_thread = threading.Thread(target=self._training_worker, daemon=True)
@@ -690,6 +833,7 @@ class TradingGUI:
         except Exception as e:
             self.log_message(f"❌ Training start error: {e}", "ERROR")
             self.reset_training_controls()
+
 
     def _training_worker(self):
         """Training worker thread with Smart Cache data loading"""
@@ -748,34 +892,53 @@ class TradingGUI:
             self.log_message(f"❌ Post-training load error: {e}", "ERROR")
 
     def start_trading(self):
-        """Start live trading with auto-loaded model"""
+        """Start live trading with current mode"""
         try:
             if not self.is_connected:
                 messagebox.showwarning("Warning", "Please connect to MT5 first")
                 return
             
-            if self.agent is None:
-                messagebox.showwarning("Warning", "Trading system not initialized")
+            # สร้าง environment ใหม่ตาม mode ปัจจุบัน (ถ้ายังไม่มี)
+            if self.environment is None:
+                self.initialize_trading_system()
+            
+            if self.environment is None:
+                messagebox.showerror("Error", "Failed to initialize trading environment")
                 return
             
-            # Double-check model is loaded
-            if not self.agent.is_trained:
-                self.log_message("⚠️ No trained model detected, attempting to load...", "WARNING")
-                success = self.agent.load_model()
-                if not success:
-                    messagebox.showerror("Error", "No trained model found. Please train or load a model first.")
-                    return
-                else:
-                    self.model_status_label.config(text="✅ Model Loaded", foreground='green')
+            # ตรวจสอบ model (เฉพาะ Conservative mode)
+            if self.current_environment_type == "conservative":
+                if self.agent is None or not self.agent.is_trained:
+                    self.log_message("⚠️ No trained model detected, attempting to load...", "WARNING")
+                    success = self.agent.load_model() if self.agent else False
+                    if not success:
+                        messagebox.showerror("Error", "No trained model found. Please train or load a model first.")
+                        return
+                    else:
+                        self.model_status_label.config(text="✅ Model Loaded", foreground='green')
             
-            # ⭐ เริ่มต้น trading session
-            self._initialize_trading_session()
-            
-            # Start trading
+            # เริ่มการเทรด
+            mode_name = self.current_environment_type.upper()
             self.is_trading = True
             self.start_trading_btn.config(state='disabled')
             self.stop_trading_btn.config(state='normal')
-            self.log_message("🚀 Recovery trading started with loaded model", "SUCCESS")
+            
+            self.log_message(f"🚀 {mode_name} trading started", "SUCCESS")
+            
+            # แสดงข้อมูล environment
+            if hasattr(self.environment, '__class__'):
+                env_class = self.environment.__class__.__name__
+                self.log_message(f"   Using: {env_class}", "INFO")
+            
+            # เพิ่มข้อมูล AI (ถ้าเป็น Aggressive mode)
+            if self.current_environment_type == "aggressive":
+                try:
+                    ai_status = self.environment.get_ai_status()
+                    if ai_status and 'session' in ai_status:
+                        session_id = ai_status['session'].get('id', 'Unknown')
+                        self.log_message(f"   AI Session: {session_id}", "INFO")
+                except:
+                    pass
             
             # Start trading loop
             self.trading_thread = threading.Thread(target=self._trading_worker, daemon=True)
@@ -783,6 +946,7 @@ class TradingGUI:
             
         except Exception as e:
             self.log_message(f"❌ Trading start error: {e}", "ERROR")
+
 
     def _initialize_trading_session(self):
         """
@@ -838,18 +1002,28 @@ class TradingGUI:
         """
         🤖 Real AI Trading Worker - หัวใจหลักของระบบเทรด
         
-        เชื่อมกับ:
-        - self.agent (RL Model) - ใช้ทำนายการเทรด
-        - self.mt5_interface (MT5) - ส่งคำสั่งซื้อ/ขาย
-        - self.environment - จัดการ state และ observation
-        - GUI Risk Settings - ใช้ค่า risk ที่ตั้งไว้
-        
-        หน้าที่:
-        1. ดึงข้อมูลตลาดแบบ real-time
-        2. ใช้ AI model ทำนายการเทรด  
-        3. คำนวณ risk และขนาด position
-        4. ส่งคำสั่งซื้อ/ขาย
-        5. จัดการ recovery strategy
+        ⭐ แก้ไข: เพิ่ม Mode Switching แต่รักษาโค้ดเดิมทั้งหมด
+        """
+        try:
+            # ⭐ เช็ค Trading Mode
+            mode = getattr(self, 'current_environment_type', 'conservative')
+            
+            if mode == 'aggressive' and hasattr(self, 'environment') and hasattr(self.environment, 'recovery_brain'):
+                # 🧠 Aggressive Mode - ใช้ AI Brain
+                self.log_message("⚡ AGGRESSIVE AI MODE - Using AI Recovery Brain", "SUCCESS")
+                self._aggressive_ai_trading_worker()
+            else:
+                # 🛡️ Conservative Mode - ใช้โค้ดเดิม
+                self.log_message("🛡️ CONSERVATIVE MODE - Using Original RL System", "SUCCESS")
+                self._conservative_original_trading_worker()
+                
+        except Exception as e:
+            self.log_message(f"❌ Trading worker initialization error: {e}", "ERROR")
+            self.emergency_stop()
+
+    def _conservative_original_trading_worker(self):
+        """
+        🛡️ Conservative Trading Worker - โค้ดเดิมของคุณทั้งหมด (ไม่แก้อะไร)
         """
         try:
             import time
@@ -958,6 +1132,157 @@ class TradingGUI:
         
         finally:
             self.log_message("🏁 AI Trading Worker Stopped", "INFO")
+
+    def _aggressive_ai_trading_worker(self):
+        """
+        ⚡ Aggressive AI Trading Worker - ใช้ AI Recovery Brain
+        """
+        try:
+            import time
+            import numpy as np
+            from datetime import datetime
+            
+            self.log_message("⚡ AI Recovery Brain Trading Started", "SUCCESS")
+            self.log_message("🎯 Target: High volume for rebate optimization", "INFO")
+            
+            # Initialize AI trading session
+            self._initialize_trading_session()
+            
+            while self.is_trading and self.running:
+                try:
+                    # AI Environment จัดการทุกอย่างเอง
+                    # เราแค่ step ด้วย dummy action เพื่อให้ AI ตัดสินใจ
+                    dummy_action = [0, 0.01, 30, 0]  # HOLD action
+                    
+                    obs, reward, done, truncated, info = self.environment.step(dummy_action)
+                    
+                    # แสดงข้อมูล AI Decision
+                    if info and 'current_ai_action' in info:
+                        ai_action = info['current_ai_action']
+                        ai_strategy = info.get('current_ai_strategy', 'Unknown')
+                        ai_confidence = info.get('current_ai_confidence', 0)
+                        daily_volume = info.get('daily_volume', 0)
+                        volume_target = info.get('volume_target', 75)
+                        total_pnl = info.get('total_pnl', 0)
+                        
+                        if ai_action != 'HOLD':  # แสดงเฉพาะเมื่อมีการเทรด
+                            self.log_message(
+                                f"🧠 AI: {ai_action} | Strategy: {ai_strategy} | "
+                                f"Confidence: {ai_confidence:.2f} | Reward: {reward:.2f}",
+                                "SUCCESS" if reward > 0 else "INFO"
+                            )
+                            
+                            # แสดง AI reasoning
+                            if 'current_ai_reasoning' in info:
+                                reasons = info['current_ai_reasoning']
+                                if reasons:
+                                    for reason in reasons[:2]:  # แสดงแค่ 2 เหตุผลแรก
+                                        self.log_message(f"   💡 {reason}", "INFO")
+                            
+                            # แสดง warnings
+                            if 'current_ai_warnings' in info:
+                                warnings = info['current_ai_warnings']
+                                if warnings:
+                                    for warning in warnings[:1]:  # แสดงแค่ warning แรก
+                                        self.log_message(f"   ⚠️ {warning}", "WARNING")
+                    
+                    # แสดงสรุปทุก 24 cycles (2 นาที)
+                    if self.current_step % 24 == 0:
+                        if info:
+                            daily_volume = info.get('daily_volume', 0)
+                            volume_target = info.get('volume_target', 75)
+                            volume_progress = info.get('volume_progress', 0)
+                            total_pnl = info.get('total_pnl', 0)
+                            ai_success_rate = info.get('ai_success_rate', 0)
+                            recovery_state = info.get('current_ai_recovery_state', 'NORMAL')
+                            
+                            status_msg = (
+                                f"⚡ AI Status: {recovery_state} | "
+                                f"Volume {daily_volume:.1f}/{volume_target} ({volume_progress:.1f}%) | "
+                                f"P&L: ${total_pnl:.2f} | Success: {ai_success_rate:.1%}"
+                            )
+                            
+                            self.log_message(status_msg, "INFO")
+                    
+                    # Update GUI recovery display
+                    self._update_recovery_display_from_ai_brain()
+                    
+                    # Check if episode done
+                    if done:
+                        self.log_message("📈 AI Episode completed - resetting", "INFO")
+                        self.environment.reset()
+                    
+                    self.current_step += 1
+                    
+                except Exception as cycle_error:
+                    self.log_message(f"❌ AI Trading cycle error: {cycle_error}", "ERROR")
+                    time.sleep(10)
+                    
+                # รอ 5 วินาที ก่อนรอบถัดไป
+                time.sleep(5)
+                
+        except Exception as e:
+            self.log_message(f"❌ AI Trading worker critical error: {e}", "ERROR")
+            self.emergency_stop()
+        
+        finally:
+            self.log_message("🏁 AI Trading Worker Stopped", "INFO")
+            
+            # End AI session
+            if hasattr(self.environment, 'end_ai_session'):
+                try:
+                    session_summary = self.environment.end_ai_session()
+                    if session_summary:
+                        self.log_message(f"📊 AI Session Summary: {session_summary.get('total_pnl', 0):.2f} P&L", "INFO")
+                except Exception as e:
+                    self.log_message(f"❌ End AI session error: {e}", "ERROR")
+
+    def _update_recovery_display_from_ai_brain(self):
+        """
+        อัปเดต Recovery Display จาก AI Brain
+        """
+        try:
+            if not hasattr(self, 'environment') or not hasattr(self.environment, 'get_ai_status'):
+                return
+                
+            ai_status = self.environment.get_ai_status()
+            
+            if not ai_status or 'session' not in ai_status:
+                return
+                
+            session = ai_status['session']
+            
+            # Recovery State
+            recovery_state = session.get('recovery_state', 'normal').upper()
+            if recovery_state == 'NORMAL':
+                self.recovery_mode_label.config(text="🟢 Normal", foreground='green')
+            elif recovery_state in ['EARLY_RECOVERY', 'ACTIVE_RECOVERY']:
+                self.recovery_mode_label.config(text=f"🔄 {recovery_state}", foreground='orange')
+            elif recovery_state in ['DEEP_RECOVERY', 'EMERGENCY']:
+                self.recovery_mode_label.config(text=f"🔴 {recovery_state}", foreground='red')
+            elif recovery_state == 'SUCCESS':
+                self.recovery_mode_label.config(text="✅ SUCCESS", foreground='green')
+            
+            # P&L
+            pnl = session.get('total_pnl', 0)
+            pnl_color = 'green' if pnl >= 0 else 'red'
+            self.total_pnl_label.config(text=f"${pnl:.2f}", foreground=pnl_color)
+            
+            # Max Drawdown
+            dd = session.get('max_drawdown', 0)
+            dd_color = 'red' if dd < -50 else 'orange' if dd < 0 else 'green'
+            self.max_drawdown_label.config(text=f"${dd:.2f}", foreground=dd_color)
+            
+            # Win Rate
+            win_rate = session.get('win_rate', 0)
+            win_color = 'green' if win_rate >= 60 else 'orange' if win_rate >= 40 else 'red'
+            total_trades = session.get('total_trades', 0)
+            winning_trades = int(total_trades * win_rate / 100) if total_trades > 0 else 0
+            self.win_rate_label.config(text=f"{winning_trades}/{total_trades} ({win_rate:.0f}%)", foreground=win_color)
+            
+        except Exception as e:
+            # Silent fail for GUI updates
+            pass
 
     def _get_current_balance(self):
         """
@@ -1839,3 +2164,177 @@ class TradingGUI:
             
         except Exception as e:
             self.log_message(f"❌ Statistics update error: {e}", "ERROR")
+
+    def show_ai_insights(self):
+        """แสดง AI Market Insights"""
+        try:
+            if self.current_environment_type != "aggressive":
+                messagebox.showinfo("Info", "AI Insights ใช้ได้เฉพาะ Aggressive Mode")
+                return
+            
+            if not self.environment or not hasattr(self.environment, 'get_ai_insights'):
+                messagebox.showwarning("Warning", "AI Environment not initialized")
+                return
+            
+            # ดึงข้อมูล AI Insights
+            insights = self.environment.get_ai_insights()
+            
+            if not insights:
+                messagebox.showwarning("Warning", "No AI insights available")
+                return
+            
+            # สร้าง Insights Window
+            self._create_ai_insights_window(insights)
+            
+        except Exception as e:
+            self.log_message(f"❌ Show AI insights error: {e}", "ERROR")
+
+    def _create_ai_insights_window(self, insights):
+        """สร้าง AI Insights Window"""
+        try:
+            # ปิด window เก่า (ถ้ามี)
+            if self.ai_insights_window and self.ai_insights_window.winfo_exists():
+                self.ai_insights_window.destroy()
+            
+            # สร้าง window ใหม่
+            self.ai_insights_window = tk.Toplevel(self.root)
+            self.ai_insights_window.title("🧠 AI Market Insights")
+            self.ai_insights_window.geometry("600x500")
+            self.ai_insights_window.configure(bg='#2b2b2b')
+            
+            # Main frame
+            main_frame = ttk.Frame(self.ai_insights_window)
+            main_frame.pack(fill='both', expand=True, padx=10, pady=10)
+            
+            # Title
+            title_label = ttk.Label(
+                main_frame, 
+                text="🧠 AI MARKET INSIGHTS", 
+                font=self.fonts['header'],
+                style='Header.TLabel'
+            )
+            title_label.pack(pady=(0, 10))
+            
+            # Insights Content
+            content_frame = ttk.Frame(main_frame)
+            content_frame.pack(fill='both', expand=True)
+            
+            # Text widget with scrollbar
+            text_widget = tk.Text(
+                content_frame, 
+                wrap=tk.WORD, 
+                font=self.fonts['console'],
+                bg='#1e1e1e', 
+                fg='white',
+                relief='flat',
+                borderwidth=1
+            )
+            scrollbar = ttk.Scrollbar(content_frame, orient='vertical', command=text_widget.yview)
+            text_widget.configure(yscrollcommand=scrollbar.set)
+            
+            text_widget.pack(side='left', fill='both', expand=True)
+            scrollbar.pack(side='right', fill='y')
+            
+            # Format insights text
+            insights_text = self._format_ai_insights(insights)
+            text_widget.insert(tk.END, insights_text)
+            text_widget.config(state='disabled')
+            
+            # Buttons frame
+            buttons_frame = ttk.Frame(main_frame)
+            buttons_frame.pack(fill='x', pady=(10, 0))
+            
+            # Refresh button
+            refresh_btn = ttk.Button(
+                buttons_frame, 
+                text="🔄 Refresh", 
+                command=lambda: self._refresh_ai_insights(text_widget),
+                style='Thai.TButton'
+            )
+            refresh_btn.pack(side='left', padx=5)
+            
+            # Close button
+            close_btn = ttk.Button(
+                buttons_frame, 
+                text="❌ Close", 
+                command=self.ai_insights_window.destroy,
+                style='Thai.TButton'
+            )
+            close_btn.pack(side='right', padx=5)
+            
+        except Exception as e:
+            self.log_message(f"❌ Create AI insights window error: {e}", "ERROR")
+
+    def _format_ai_insights(self, insights):
+        """จัดรูปแบบ AI Insights เป็นข้อความ"""
+        try:
+            text = f"""
+    🧠 AI MARKET INSIGHTS
+    {'='*60}
+
+    📊 MARKET ANALYSIS:
+    Market Regime: {insights.get('market_regime', 'Unknown')}
+    Trading Session: {insights.get('trading_session', 'Unknown')}
+    Volatility Level: {insights.get('volatility_level', 'Unknown')}
+    Trend Direction: {insights.get('trend_direction', 'Unknown')}
+    Confidence Level: {insights.get('confidence_level', 'Unknown')}
+
+    🎯 RECOMMENDED STRATEGIES:
+    """
+            
+            strategies = insights.get('recommended_strategies', [])
+            for i, strategy in enumerate(strategies, 1):
+                text += f"   {i}. {strategy}\n"
+            
+            # Warnings
+            warnings = insights.get('warnings', [])
+            if warnings:
+                text += f"\n⚠️ WARNINGS:\n"
+                for warning in warnings:
+                    text += f"   • {warning}\n"
+            
+            # Opportunities
+            opportunities = insights.get('opportunities', [])
+            if opportunities:
+                text += f"\n💡 OPPORTUNITIES:\n"
+                for opp in opportunities:
+                    text += f"   • {opp}\n"
+            
+            # Additional info
+            text += f"\n📈 ADDITIONAL INFO:\n"
+            text += f"   Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            
+            if hasattr(self.environment, 'get_ai_status'):
+                ai_status = self.environment.get_ai_status()
+                session_info = ai_status.get('session', {})
+                if session_info:
+                    text += f"   AI Session: {session_info.get('id', 'Unknown')}\n"
+                    text += f"   Total Decisions: {ai_status.get('performance', {}).get('total_decisions', 0)}\n"
+            
+            return text
+            
+        except Exception as e:
+            return f"❌ Error formatting insights: {e}"
+
+    def _refresh_ai_insights(self, text_widget):
+        """รีเฟรช AI Insights"""
+        try:
+            if not self.environment or not hasattr(self.environment, 'get_ai_insights'):
+                return
+            
+            # ดึงข้อมูลใหม่
+            insights = self.environment.get_ai_insights()
+            
+            if insights:
+                # อัปเดต text widget
+                text_widget.config(state='normal')
+                text_widget.delete(1.0, tk.END)
+                
+                new_text = self._format_ai_insights(insights)
+                text_widget.insert(tk.END, new_text)
+                text_widget.config(state='disabled')
+                
+                self.log_message("🔄 AI Insights refreshed", "INFO")
+            
+        except Exception as e:
+            self.log_message(f"❌ Refresh AI insights error: {e}", "ERROR")

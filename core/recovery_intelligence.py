@@ -501,9 +501,69 @@ class RecoveryIntelligence:
                 confidence = base_confidence
                 reasoning.append("Recovery successful - normal trading")
         
-        else:  # EMERGENCY_RECOVERY
-            # กลยุทธ์ฉุกเฉิน - ระมัดระวังสูงสุด
-            return ActionType.HOLD
+        else:  # NORMAL
+            # เทรดปกติ
+            action = self._choose_normal_action(strategy, market_context)
+            confidence = base_confidence
+            reasoning.append("Normal trading mode")
+        
+        return {
+            'action': action,
+            'confidence': confidence,
+            'reasoning': reasoning,
+            'warnings': warnings
+        }
+
+    def _choose_recovery_action(self, strategy: StrategyType, 
+                               market_context: MarketContext, 
+                               num_positions: int) -> ActionType:
+        """
+        🔄 เลือกการกระทำแก้ไม้
+        
+        หน้าที่:
+        - เลือกการกระทำที่เหมาะสมสำหรับแก้ไม้
+        - ใช้ strategy และ market context ในการตัดสินใจ
+        """
+        # ถ้ามีตำแหน่งเยอะแล้ว อาจต้องปิดบางส่วน
+        if num_positions >= self.max_positions:
+            return ActionType.CLOSE_ALL
+        
+        # เลือกตาม strategy type
+        if strategy == StrategyType.HEDGING_RECOVERY:
+            # สำหรับ hedge - เปิดตรงข้าม
+            return ActionType.HEDGE
+        
+        elif strategy == StrategyType.AGGRESSIVE_GRID:
+            # Grid strategy - เปิดตาม trend
+            if market_context.trend_strength > 0:
+                return ActionType.RECOVERY_BUY
+            else:
+                return ActionType.RECOVERY_SELL
+        
+        elif strategy == StrategyType.MEAN_REVERSION:
+            # Mean reversion - เปิดตรงข้ามกับ trend
+            if market_context.trend_strength > 0:
+                return ActionType.RECOVERY_SELL
+            else:
+                return ActionType.RECOVERY_BUY
+        
+        elif strategy == StrategyType.BREAKOUT_RECOVERY:
+            # Breakout - ตาม momentum
+            if market_context.volatility_score > 60:
+                if market_context.trend_strength > 30:
+                    return ActionType.RECOVERY_BUY
+                elif market_context.trend_strength < -30:
+                    return ActionType.RECOVERY_SELL
+        
+        elif strategy == StrategyType.MOMENTUM_RECOVERY:
+            # Momentum - ขยายทิศทางเดิม
+            if market_context.trend_strength > 40:
+                return ActionType.RECOVERY_BUY
+            elif market_context.trend_strength < -40:
+                return ActionType.RECOVERY_SELL
+        
+        # Default - conservative approach
+        return ActionType.HOLD
 
     def _choose_normal_action(self, strategy: StrategyType, 
                              market_context: MarketContext) -> ActionType:
@@ -967,15 +1027,175 @@ class RecoveryIntelligence:
             print(f"❌ End session error: {e}")
             return {'error': str(e)}
 
-    # Helper function สำหรับใช้งานง่าย
-    def create_recovery_brain(mt5_interface, config: Dict = None) -> RecoveryIntelligence:
+    def force_strategy_change(self, new_strategy: StrategyType, reason: str = "Manual override"):
         """
-        🚀 ฟังก์ชันช่วยสำหรับสร้าง Recovery Brain
+        🔄 บังคับเปลี่ยนกลยุทธ์
         
-        Usage:
-            brain = create_recovery_brain(mt5_interface, config)
-            session_id = brain.start_recovery_session()
-            decision = brain.make_recovery_decision(current_positions)
+        หน้าที่:
+        - เปลี่ยนกลยุทธ์โดยไม่ขึ้นกับ market analysis
+        - ใช้สำหรับการทดสอบหรือกรณีพิเศษ
         """
-        return RecoveryIntelligence(mt5_interface, config)
+        if self.current_session:
+            old_strategy = self.current_session.current_strategy
+            self.current_session.current_strategy = new_strategy
+            self.performance_metrics['strategy_changes'] += 1
+            
+            print(f"🔄 Strategy changed: {old_strategy} → {new_strategy.value}")
+            print(f"   Reason: {reason}")
+
+    def get_strategy_performance_report(self) -> Dict:
+        """
+        📊 รายงานประสิทธิภาพกลยุทธ์
+        
+        หน้าที่:
+        - สรุปประสิทธิภาพของแต่ละกลยุทธ์
+        - ใช้สำหรับการปรับปรุงระบบ
+        """
+        try:
+            report = {
+                'total_sessions': len(self.recovery_history),
+                'current_session': None,
+                'strategy_usage': {},
+                'success_rates': {},
+                'avg_performance': {}
+            }
+            
+            # ข้อมูล current session
+            if self.current_session:
+                report['current_session'] = {
+                    'state': self.current_session.recovery_state.value,
+                    'pnl': self.current_session.total_pnl,
+                    'trades': self.current_session.total_trades,
+                    'strategy': self.current_session.current_strategy.value if self.current_session.current_strategy else None
+                }
+            
+            # วิเคราะห์ประวัติ
+            strategy_stats = {}
+            for session in self.recovery_history:
+                final_state = session.get('final_state', 'unknown')
+                # Note: ในเวอร์ชันนี้ยังไม่ได้เก็บ strategy ใน history
+                # ควรเพิ่มในอนาคต
+            
+            report['performance_metrics'] = self.performance_metrics
+            
+            return report
+            
+        except Exception as e:
+            print(f"❌ Performance report error: {e}")
+            return {'error': str(e)}
+
+    def update_strategy_feedback(self, strategy_type: StrategyType, 
+                                performance_data: Dict):
+        """
+        📈 อัปเดตผลตอบรับของกลยุทธ์
+        
+        หน้าที่:
+        - รับ feedback จากผลการเทรด
+        - ส่งต่อไปยัง StrategySelector
+        - ปรับปรุงการเลือกกลยุทธ์ในอนาคต
+        """
+        try:
+            self.strategy_selector.update_strategy_performance(
+                strategy_type, performance_data
+            )
+            
+            print(f"📈 Strategy feedback updated for {strategy_type.value}")
+            print(f"   Performance data: {performance_data}")
+            
+        except Exception as e:
+            print(f"❌ Strategy feedback error: {e}")
+
+    def get_market_insights(self) -> Dict:
+        """
+        💡 ข้อมูลเชิงลึกเกี่ยวกับตลาด
+        
+        หน้าที่:
+        - ดึงข้อมูล market analysis ล่าสุด
+        - สรุปเป็นรูปแบบที่เข้าใจง่าย
+        - ใช้สำหรับ GUI display
+        """
+        try:
+            market_context = self.market_analyzer.analyze_market()
+            
+            insights = {
+                'market_regime': market_context.regime.value,
+                'trading_session': market_context.session.value,
+                'volatility_level': self._classify_volatility(market_context.volatility_score),
+                'trend_direction': self._classify_trend(market_context.trend_strength),
+                'confidence_level': self._classify_confidence(market_context.confidence_score),
+                'recommended_strategies': market_context.recommended_strategies[:3],
+                'warnings': [],
+                'opportunities': []
+            }
+            
+            # เพิ่มคำเตือนและโอกาส
+            if market_context.volatility_score > 80:
+                insights['warnings'].append("High volatility - increased risk")
+            
+            if market_context.confidence_score > 0.8:
+                insights['opportunities'].append("High confidence signals")
+            
+            if market_context.news_impact_level >= 3:
+                insights['warnings'].append("High impact news expected")
+            
+            return insights
+            
+        except Exception as e:
+            print(f"❌ Market insights error: {e}")
+            return {'error': str(e)}
+
+    def _classify_volatility(self, score: float) -> str:
+        """จำแนกระดับความผันผวน"""
+        if score > 80: return "Very High"
+        elif score > 60: return "High"
+        elif score > 40: return "Medium"
+        elif score > 20: return "Low"
+        else: return "Very Low"
+
+    def _classify_trend(self, strength: float) -> str:
+        """จำแนกทิศทางเทรนด์"""
+        if strength > 60: return "Strong Bullish"
+        elif strength > 20: return "Weak Bullish"
+        elif strength > -20: return "Sideways"
+        elif strength > -60: return "Weak Bearish"
+        else: return "Strong Bearish"
+
+    def _classify_confidence(self, confidence: float) -> str:
+        """จำแนกระดับความเชื่อมั่น"""
+        if confidence > 0.8: return "Very High"
+        elif confidence > 0.6: return "High"
+        elif confidence > 0.4: return "Medium"
+        elif confidence > 0.2: return "Low"
+        else: return "Very Low"
+
+# Helper functions สำหรับใช้งานง่าย
+def create_recovery_brain(mt5_interface, config: Dict = None) -> RecoveryIntelligence:
+    """
+    🚀 ฟังก์ชันช่วยสำหรับสร้าง Recovery Brain
     
+    Usage:
+        brain = create_recovery_brain(mt5_interface, config)
+        session_id = brain.start_recovery_session()
+        decision = brain.make_recovery_decision(current_positions)
+    """
+    return RecoveryIntelligence(mt5_interface, config)
+
+def quick_recovery_decision(mt5_interface, config: Dict = None, 
+                          current_positions: List = None) -> RecoveryDecision:
+    """
+    ⚡ ฟังก์ชันช่วยสำหรับตัดสินใจแบบเร็ว
+    
+    Usage:
+        decision = quick_recovery_decision(mt5_interface, config, positions)
+        print(f"Action: {decision.action.name}, Strategy: {decision.strategy_type.value}")
+    """
+    brain = RecoveryIntelligence(mt5_interface, config)
+    brain.start_recovery_session()
+    return brain.make_recovery_decision(current_positions)
+
+# Example usage and testing functions
+if __name__ == "__main__":
+    # ตัวอย่างการใช้งาน (สำหรับทดสอบ)
+    print("🧠 Recovery Intelligence Brain - Example Usage")
+    print("This module requires MT5 interface to run properly")
+    print("Import this module and use create_recovery_brain() function")

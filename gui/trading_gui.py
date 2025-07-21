@@ -329,7 +329,7 @@ class TradingGUI:
 
     def setup_training_tab(self):
         """Setup training controls tab with recovery settings"""
-        # === CONFIGURATION SECTION ===
+        # === CONFIGURATION SECTION === (เดิม)
         config_frame = ttk.LabelFrame(self.training_frame, text="⚙️ Configuration")
         config_frame.pack(fill='x', padx=10, pady=5)
         
@@ -361,8 +361,8 @@ class TradingGUI:
         ttk.Label(config_grid, text="Learning Rate:").grid(row=4, column=0, sticky='w')
         lr_entry = ttk.Entry(config_grid, textvariable=self.learning_rate_var, width=10)
         lr_entry.grid(row=4, column=1, sticky='w', padx=(10, 0))
-        
-        # === RECOVERY STRATEGY SECTION ===
+
+        # === RECOVERY STRATEGY SECTION === (เดิม)
         recovery_frame = ttk.LabelFrame(self.training_frame, text="🔄 Recovery Strategy")
         recovery_frame.pack(fill='x', padx=10, pady=5)
         
@@ -383,8 +383,40 @@ class TradingGUI:
         ttk.Label(recovery_grid, text="Max Recovery Levels:", style='Thai.TLabel').grid(row=2, column=0, sticky='w')
         max_recovery_entry = ttk.Entry(recovery_grid, textvariable=self.max_recovery_levels_var, width=10, style='Thai.TEntry')
         max_recovery_entry.grid(row=2, column=1, sticky='w', padx=(10, 0))
+
+        # ⭐⭐⭐ เพิ่มส่วนนี้ - RISK MANAGEMENT SECTION ⭐⭐⭐
+        risk_frame = ttk.LabelFrame(self.training_frame, text="⚠️ Risk Management")
+        risk_frame.pack(fill='x', padx=10, pady=5)
         
-        # === DATA SETTINGS SECTION ===
+        risk_grid = ttk.Frame(risk_frame)
+        risk_grid.pack(fill='x', padx=10, pady=10)
+        
+        # Risk per trade
+        ttk.Label(risk_grid, text="Risk per Trade (%):", style='Thai.TLabel').grid(row=0, column=0, sticky='w')
+        risk_trade_entry = ttk.Entry(risk_grid, textvariable=self.risk_per_trade_var, width=10, style='Thai.TEntry')
+        risk_trade_entry.grid(row=0, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(risk_grid, text="(2% = เสี่ยง 2% ของทุนต่อการเทรด)", style='Comment.TLabel').grid(row=0, column=2, sticky='w', padx=(5, 0))
+        
+        # Max daily risk
+        ttk.Label(risk_grid, text="Max Daily Risk (%):", style='Thai.TLabel').grid(row=1, column=0, sticky='w')
+        daily_risk_entry = ttk.Entry(risk_grid, textvariable=self.max_daily_risk_var, width=10, style='Thai.TEntry')
+        daily_risk_entry.grid(row=1, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(risk_grid, text="(10% = หยุดเทรดเมื่อขาดทุน 10%/วัน)", style='Comment.TLabel').grid(row=1, column=2, sticky='w', padx=(5, 0))
+        
+        # Max lot size
+        ttk.Label(risk_grid, text="Max Lot Size:", style='Thai.TLabel').grid(row=2, column=0, sticky='w')
+        max_lot_entry = ttk.Entry(risk_grid, textvariable=self.max_lot_size_var, width=10, style='Thai.TEntry')
+        max_lot_entry.grid(row=2, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(risk_grid, text="(0.10 = ไม่เกิน 0.10 lots ต่อคำสั่ง)", style='Comment.TLabel').grid(row=2, column=2, sticky='w', padx=(5, 0))
+        
+        # Stop loss pips
+        ttk.Label(risk_grid, text="Stop Loss (pips):", style='Thai.TLabel').grid(row=3, column=0, sticky='w')
+        sl_pips_entry = ttk.Entry(risk_grid, textvariable=self.stop_loss_pips_var, width=10, style='Thai.TEntry')
+        sl_pips_entry.grid(row=3, column=1, sticky='w', padx=(10, 0))
+        ttk.Label(risk_grid, text="(20 = Stop loss 20 pips)", style='Comment.TLabel').grid(row=3, column=2, sticky='w', padx=(5, 0))
+        # ⭐⭐⭐ จบส่วนที่เพิ่ม ⭐⭐⭐
+
+        # === DATA SETTINGS SECTION === (เดิม - เหมือนเดิม)
         data_frame = ttk.LabelFrame(self.training_frame, text="📊 Historical Data Settings")
         data_frame.pack(fill='x', padx=10, pady=5)
         
@@ -412,14 +444,14 @@ class TradingGUI:
         
         # Cache refresh button with Thai-friendly style
         self.refresh_cache_btn = ttk.Button(data_grid, text="🔄 Refresh Data Cache", 
-                                           command=self.refresh_data_cache, style='Thai.TButton')
+                                        command=self.refresh_data_cache, style='Thai.TButton')
         self.refresh_cache_btn.grid(row=3, column=2, sticky='w', padx=(10, 0))
         
         # Save config button with Thai-friendly style
         save_config_btn = ttk.Button(config_grid, text="💾 Save Config", command=self.save_config, style='Thai.TButton')
         save_config_btn.grid(row=5, column=0, columnspan=3, pady=10)
-        
-        # === TRAINING CONTROLS SECTION ===
+
+        # === TRAINING CONTROLS SECTION === (เดิม - เหมือนเดิม)
         training_ctrl_frame = ttk.LabelFrame(self.training_frame, text="🎓 Training Controls")
         training_ctrl_frame.pack(fill='x', padx=10, pady=5)
         
@@ -432,12 +464,12 @@ class TradingGUI:
         self.start_training_btn.pack(side='left', padx=5)
         
         self.stop_training_btn = ttk.Button(training_controls, text="⏹️ Stop Training", 
-                                           command=self.stop_training, state='disabled', style='Thai.TButton')
+                                        command=self.stop_training, state='disabled', style='Thai.TButton')
         self.stop_training_btn.pack(side='left', padx=5)
         
         # Load model button with Thai-friendly style
         load_model_training_btn = ttk.Button(training_controls, text="📥 Load Model", 
-                                           command=self.manual_load_model, style='Thai.TButton')
+                                        command=self.manual_load_model, style='Thai.TButton')
         load_model_training_btn.pack(side='left', padx=5)
         
         # Training status with Thai-friendly font

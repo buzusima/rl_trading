@@ -7,5 +7,9 @@
   "recovery_multiplier": 1.5,
   "recovery_threshold": -20.0,
   "max_recovery_levels": 3,
+  "risk_per_trade": 2.0,
+  "max_daily_risk": 10.0,
+  "max_lot_size": 0.1,
+  "stop_loss_pips": 20,
   "max_drawdown_limit": -500.0
 }

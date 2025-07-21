@@ -4,15 +4,9 @@ import threading
 import json
 import os
 from datetime import datetime
+import numpy as np  # ⭐ เพิ่มบรรทัดนี้
 
 class TradingGUI:
-    """
-    Recovery Trading GUI - Fixed Version
-    - Recovery strategy controls
-    - Historical data management  
-    - Real-time recovery monitoring
-    - Smart cache integration
-    """
     
     def __init__(self):
         print("🎨 Initializing Recovery Trading GUI...")
@@ -23,13 +17,31 @@ class TradingGUI:
         self.root.geometry("900x700")
         self.root.configure(bg='#2b2b2b')
         
-        # ✅ Configure Thai fonts for better readability
+        # Configure Thai fonts
         self.setup_fonts()
         
-        # System state
+        # ⭐ เพิ่มตัวแปร Trading State ที่ขาดหายไป
         self.is_connected = False
         self.is_training = False
         self.is_trading = False
+        
+        # ⭐ เพิ่มตัวแปร Trading Session ที่ขาดหายไป
+        self.current_step = 0
+        self.trading_session_start = None
+        self.session_start_balance = 0.0
+        self.daily_pnl = 0.0
+        
+        # ⭐ เพิ่มตัวแปร Recovery State ที่ขาดหายไป
+        self.in_recovery_mode = False
+        self.recovery_level = 0
+        self.recovery_start_pnl = 0.0
+        self.recovery_target = 0.0
+        
+        # ⭐ เพิ่มตัวแปร Performance Tracking ที่ขาดหายไป
+        self.total_trades_today = 0
+        self.winning_trades_today = 0
+        self.losing_trades_today = 0
+        self.max_drawdown_today = 0.0
         
         # Core components
         self.mt5_interface = None
@@ -129,36 +141,45 @@ class TradingGUI:
         style.configure('Thai.TEntry', font=self.fonts['default'])
 
     def initialize_variables(self):
-        """Initialize all GUI variables"""
-        # Basic config variables
+        """Initialize all GUI variables รวม Risk Management"""
+        # Basic config variables (เดิม)
         self.symbol_var = tk.StringVar(value=self.config.get('symbol', 'XAUUSD'))
         self.lot_size_var = tk.DoubleVar(value=self.config.get('lot_size', 0.01))
         self.max_positions_var = tk.IntVar(value=self.config.get('max_positions', 5))
         self.training_steps_var = tk.IntVar(value=self.config.get('training_steps', 100000))
         self.learning_rate_var = tk.DoubleVar(value=self.config.get('learning_rate', 0.0003))
         
-        # Recovery config variables
+        # Recovery config variables (เดิม)
         self.recovery_multiplier_var = tk.DoubleVar(value=self.config.get('recovery_multiplier', 1.5))
         self.recovery_threshold_var = tk.DoubleVar(value=self.config.get('recovery_threshold', -20.0))
         self.max_recovery_levels_var = tk.IntVar(value=self.config.get('max_recovery_levels', 3))
-        # Removed max_drawdown_limit_var
         
-        # Auto-scroll variable
+        # ⭐ เพิ่ม Risk Management Variables
+        self.risk_per_trade_var = tk.DoubleVar(value=self.config.get('risk_per_trade', 2.0))  # 2% per trade
+        self.max_daily_risk_var = tk.DoubleVar(value=self.config.get('max_daily_risk', 10.0))  # 10% per day
+        self.max_lot_size_var = tk.DoubleVar(value=self.config.get('max_lot_size', 0.10))  # Max 0.10 lots
+        self.stop_loss_pips_var = tk.IntVar(value=self.config.get('stop_loss_pips', 20))  # 20 pips SL
+        
+        # Auto-scroll variable (เดิม)
         self.auto_scroll_var = tk.BooleanVar(value=True)
-
+    
     def load_config(self):
-        """Load configuration including recovery settings"""
+        """Load configuration รวม Risk Management settings"""
         default_config = {
-            'symbol': 'XAUUSD.v',  # ✅ Updated to correct symbol
-            'lot_size': 0.02,      # ✅ Updated for $4000 account
+            'symbol': 'XAUUSD.v',
+            'lot_size': 0.02,
             'max_positions': 3,
-            'training_steps': 100000,  # ✅ Increased for comprehensive training
+            'training_steps': 100000,
             'learning_rate': 0.0003,
-            # Recovery settings
-            'recovery_multiplier': 1.4,     # ✅ Updated for $4000 account
-            'recovery_threshold': -35.0,    # ✅ Updated for $4000 account  
-            'max_recovery_levels': 3
-            # Removed max_drawdown_limit
+            # Recovery settings (เดิม)
+            'recovery_multiplier': 1.4,
+            'recovery_threshold': -35.0,
+            'max_recovery_levels': 3,
+            # ⭐ Risk Management settings ใหม่
+            'risk_per_trade': 2.0,      # 2% risk per trade
+            'max_daily_risk': 10.0,     # 10% max daily risk
+            'max_lot_size': 0.10,       # Max 0.10 lots
+            'stop_loss_pips': 20        # 20 pips stop loss
         }
         
         try:
@@ -167,7 +188,7 @@ class TradingGUI:
                 with open(config_file, 'r') as f:
                     loaded_config = json.load(f)
                     default_config.update(loaded_config)
-                    print("✅ Configuration loaded (including recovery settings)")
+                    print("✅ Configuration loaded (including risk management)")
         except Exception as e:
             print(f"⚠️ Config load error: {e}, using defaults")
         
@@ -447,7 +468,7 @@ class TradingGUI:
         ttk.Checkbutton(log_controls, text="Auto-scroll", variable=self.auto_scroll_var).pack(side='right')
 
     def save_config(self):
-        """Save current configuration including recovery settings"""
+        """Save current configuration รวม Risk Management"""
         try:
             os.makedirs('config', exist_ok=True)
             config_file = 'config/config.json'
@@ -462,17 +483,22 @@ class TradingGUI:
                 # Recovery settings
                 'recovery_multiplier': self.recovery_multiplier_var.get(),
                 'recovery_threshold': self.recovery_threshold_var.get(),
-                'max_recovery_levels': self.max_recovery_levels_var.get()
-                # Removed max_drawdown_limit
+                'max_recovery_levels': self.max_recovery_levels_var.get(),
+                # ⭐ Risk Management settings
+                'risk_per_trade': self.risk_per_trade_var.get(),
+                'max_daily_risk': self.max_daily_risk_var.get(),
+                'max_lot_size': self.max_lot_size_var.get(),
+                'stop_loss_pips': self.stop_loss_pips_var.get()
             })
             
             with open(config_file, 'w') as f:
                 json.dump(self.config, f, indent=2)
             
-            self.log_message("✅ Configuration saved (including recovery settings)", "SUCCESS")
+            self.log_message("✅ Configuration saved (including risk management)", "SUCCESS")
             
         except Exception as e:
             self.log_message(f"❌ Config save error: {e}", "ERROR")
+
 
     def connect_mt5(self):
         """Connect to MT5"""
@@ -710,6 +736,9 @@ class TradingGUI:
                 else:
                     self.model_status_label.config(text="✅ Model Loaded", foreground='green')
             
+            # ⭐ เริ่มต้น trading session
+            self._initialize_trading_session()
+            
             # Start trading
             self.is_trading = True
             self.start_trading_btn.config(state='disabled')
@@ -723,29 +752,374 @@ class TradingGUI:
         except Exception as e:
             self.log_message(f"❌ Trading start error: {e}", "ERROR")
 
+    def _initialize_trading_session(self):
+        """
+        🚀 เริ่มต้น Trading Session ใหม่
+        
+        เชื่อมกับ:
+        - start_trading() method
+        - MT5 account info
+        
+        หน้าที่:
+        1. รีเซ็ตตัวแปร session
+        2. บันทึก balance เริ่มต้น
+        3. รีเซ็ต recovery state
+        4. เริ่มนับ performance metrics
+        """
+        try:
+            from datetime import datetime
+            
+            # รีเซ็ต session variables
+            self.current_step = 0
+            self.trading_session_start = datetime.now()
+            
+            # ดึง balance เริ่มต้น
+            if self.mt5_interface:
+                account_info = self.mt5_interface.get_account_info()
+                if account_info:
+                    self.session_start_balance = account_info.get('balance', 0.0)
+                else:
+                    self.session_start_balance = 0.0
+            else:
+                self.session_start_balance = 0.0
+            
+            # รีเซ็ต recovery state
+            self.in_recovery_mode = False
+            self.recovery_level = 0
+            self.recovery_start_pnl = 0.0
+            self.recovery_target = 0.0
+            
+            # รีเซ็ต performance tracking
+            self.total_trades_today = 0
+            self.winning_trades_today = 0
+            self.losing_trades_today = 0
+            self.max_drawdown_today = 0.0
+            self.daily_pnl = 0.0
+            
+            self.log_message(f"🚀 Trading session initialized - Start balance: ${self.session_start_balance:.2f}", "SUCCESS")
+            
+        except Exception as e:
+            self.log_message(f"❌ Session initialization error: {e}", "ERROR")
+
+
     def _trading_worker(self):
-        """Trading worker thread - implement your trading logic here"""
+        """
+        🤖 Real AI Trading Worker - หัวใจหลักของระบบเทรด
+        
+        เชื่อมกับ:
+        - self.agent (RL Model) - ใช้ทำนายการเทรด
+        - self.mt5_interface (MT5) - ส่งคำสั่งซื้อ/ขาย
+        - self.environment - จัดการ state และ observation
+        - GUI Risk Settings - ใช้ค่า risk ที่ตั้งไว้
+        
+        หน้าที่:
+        1. ดึงข้อมูลตลาดแบบ real-time
+        2. ใช้ AI model ทำนายการเทรด  
+        3. คำนวณ risk และขนาด position
+        4. ส่งคำสั่งซื้อ/ขาย
+        5. จัดการ recovery strategy
+        """
         try:
             import time
+            import numpy as np
+            from datetime import datetime
+            
+            self.log_message("🚀 AI Trading Worker Started - LIVE MODE", "SUCCESS")
+            self.log_message(f"🎯 Risk per Trade: {self.risk_per_trade_var.get():.2f}%", "INFO")
+            self.log_message(f"💰 Max Daily Risk: {self.max_daily_risk_var.get():.2f}%", "INFO")
+            
+            # Initialize trading session
+            session_start_balance = self._get_current_balance()
+            daily_risk_used = 0.0
             
             while self.is_trading and self.running:
-                # Get current observation
-                # Make prediction
-                # Execute trade if needed
-                # This is where you'd implement the actual trading loop
-                
-                self.log_message("💹 Trading cycle...", "INFO")
-                time.sleep(5)  # Placeholder - replace with actual trading logic
+                try:
+                    # ===== 1. GET REAL-TIME MARKET DATA =====
+                    # เชื่อมกับ MT5 เพื่อดึงข้อมูลล่าสุด
+                    current_observation = self._get_live_observation()
+                    if current_observation is None:
+                        self.log_message("⚠️ Cannot get market observation", "WARNING")
+                        time.sleep(5)
+                        continue
+                    
+                    # ===== 2. DAILY RISK CHECK =====
+                    # ตรวจสอบว่าใช้ risk เกินที่กำหนดไหม
+                    current_balance = self._get_current_balance()
+                    daily_loss = session_start_balance - current_balance
+                    daily_risk_pct = (daily_loss / session_start_balance) * 100
+                    
+                    if daily_risk_pct >= self.max_daily_risk_var.get():
+                        self.log_message(f"🛑 Daily risk limit reached: {daily_risk_pct:.2f}%", "ERROR")
+                        self.log_message("⏹️ Stopping trading for today", "WARNING")
+                        self.stop_trading()
+                        break
+                    
+                    # ===== 3. AI MODEL PREDICTION =====
+                    # ใช้ trained model ทำนายการเทรด
+                    if not self.agent or not self.agent.is_trained:
+                        self.log_message("❌ No trained model available", "ERROR")
+                        break
+                    
+                    # ทำนายด้วย AI
+                    predicted_action = self.agent.predict(current_observation)
+                    action_type = int(predicted_action[0])
+                    volume_ratio = float(predicted_action[1]) if len(predicted_action) > 1 else 0.01
+                    
+                    # แปลง action เป็นคำสั่งที่เข้าใจได้
+                    action_name = self._get_action_name(action_type)
+                    self.log_message(f"🧠 AI Decision: {action_name} (confidence: {volume_ratio:.3f})", "INFO")
+                    
+                    # ===== 4. RISK CALCULATION =====
+                    # คำนวณขนาด position ตาม risk management
+                    if action_type in [1, 2]:  # BUY or SELL
+                        position_size = self._calculate_risk_based_position_size()
+                        
+                        if position_size == 0:
+                            self.log_message("⚠️ Position size too small - skipping trade", "WARNING")
+                            time.sleep(10)
+                            continue
+                            
+                        self.log_message(f"📊 Calculated position size: {position_size:.2f} lots", "INFO")
+                        
+                        # ===== 5. EXECUTE TRADE =====
+                        # ส่งคำสั่งไปยัง MT5
+                        success = self._execute_ai_trade(action_type, position_size, predicted_action)
+                        
+                        if success:
+                            # อัพเดท daily risk usage
+                            trade_risk = (position_size * 100000 * 0.01) / current_balance * 100  # Rough estimate
+                            daily_risk_used += trade_risk
+                            self.log_message(f"✅ Trade executed - Daily risk used: {daily_risk_used:.2f}%", "SUCCESS")
+                        
+                    elif action_type == 3:  # CLOSE ALL
+                        self.log_message("🔄 AI Signal: Close all positions", "INFO")
+                        closed_positions = self._close_all_positions()
+                        if closed_positions > 0:
+                            self.log_message(f"✅ Closed {closed_positions} positions", "SUCCESS")
+                    
+                    elif action_type == 0:  # HOLD
+                        self.log_message("⏸️ AI Signal: Hold (no action)", "INFO")
+                    
+                    # ===== 6. RECOVERY MODE CHECK =====
+                    # ตรวจสอบว่าควรเข้า recovery mode หรือไม่
+                    self._check_recovery_mode()
+                    
+                    # ===== 7. POSITION MONITORING =====
+                    # ตรวจสอบ positions ที่เปิดอยู่
+                    self._monitor_open_positions()
+                    
+                    # แสดงสถานะปัจจุบัน
+                    if self.current_step % 12 == 0:  # ทุก 1 นาที (5s * 12)
+                        self._log_trading_status(current_balance, daily_risk_pct)
+                    
+                    self.current_step += 1
+                    
+                except Exception as trade_error:
+                    self.log_message(f"❌ Trading cycle error: {trade_error}", "ERROR")
+                    
+                # รอ 5 วินาที ก่อนรอบถัดไป
+                time.sleep(5)
                 
         except Exception as e:
-            self.log_message(f"❌ Trading worker error: {e}", "ERROR")
+            self.log_message(f"❌ Trading worker critical error: {e}", "ERROR")
+            self.emergency_stop()
+        
+        finally:
+            self.log_message("🏁 AI Trading Worker Stopped", "INFO")
 
+    def _get_current_balance(self):
+        """
+        💰 ดึง account balance ปัจจุบัน
+        
+        เชื่อมกับ:
+        - self.mt5_interface - ดึงข้อมูล account
+        
+        หน้าที่:
+        - Return balance ปัจจุบัน
+        - Handle error กรณีไม่สามารถดึงข้อมูลได้
+        """
+        try:
+            if not self.mt5_interface:
+                return 0.0
+                
+            account_info = self.mt5_interface.get_account_info()
+            if account_info:
+                return account_info.get('balance', 0.0)
+            return 0.0
+        except Exception as e:
+            self.log_message(f"❌ Balance error: {e}", "ERROR")
+            return 0.0
+
+    def _get_action_name(self, action_type):
+        """
+        📝 แปลง action number เป็นชื่อที่เข้าใจง่าย
+        
+        เชื่อมกับ:
+        - AI Model predictions
+        
+        หน้าที่:
+        - แปลง 0,1,2,3,4 เป็น HOLD, BUY, SELL, CLOSE, RECOVERY
+        """
+        action_names = {
+            0: "HOLD",
+            1: "BUY", 
+            2: "SELL",
+            3: "CLOSE_ALL",
+            4: "RECOVERY"
+        }
+        return action_names.get(action_type, "UNKNOWN")
+
+    def _log_trading_status(self, balance, daily_risk_pct):
+        """
+        📊 แสดงสถานะการเทรดปัจจุบัน
+        
+        เชื่อมกับ:
+        - GUI Log display
+        - Account information
+        
+        หน้าที่:
+        - แสดงข้อมูลสถานะครบถ้วน
+        - ช่วยในการ monitor ระบบ
+        """
+        positions = self.mt5_interface.get_positions() if self.mt5_interface else []
+        total_profit = sum(pos.get('profit', 0) for pos in positions)
+        
+        status_msg = (f"📊 Status: Balance=${balance:.2f} | "
+                    f"Positions={len(positions)} | "
+                    f"Unrealized P&L=${total_profit:.2f} | "
+                    f"Daily Risk={daily_risk_pct:.1f}%")
+        
+        self.log_message(status_msg, "INFO")
+
+
+    def _get_live_observation(self):
+        
+        try:
+            symbol = self.config.get('symbol', 'XAUUSD')
+            
+            # ดึงราคาปัจจุบัน
+            current_price = self.mt5_interface.get_current_price(symbol)
+            if not current_price:
+                return None
+                
+            # ดึงข้อมูล historical สำหรับคำนวณ indicators
+            rates = self.mt5_interface.get_rates(symbol, 5, 100)  # M5, 100 candles
+            if rates is None or len(rates) < 50:
+                return None
+                
+            # คำนวณ basic indicators (simplified for live trading)
+            closes = [rate[4] for rate in rates]  # Close prices
+            current_close = current_price['bid']
+            
+            # สร้าง observation array (40 มิติ)
+            obs = np.zeros(40, dtype=np.float32)
+            
+            # Market data (15 features)
+            obs[0] = (current_price['ask'] - current_price['bid']) / current_close  # Spread
+            obs[1] = current_close / closes[-2] - 1  # Price change
+            
+            # Simple moving averages
+            if len(closes) >= 20:
+                sma20 = np.mean(closes[-20:])
+                obs[2] = (current_close - sma20) / current_close
+            
+            if len(closes) >= 50:
+                sma50 = np.mean(closes[-50:])
+                obs[3] = (current_close - sma50) / current_close
+                
+            # Position และ account info
+            positions = self.mt5_interface.get_positions(symbol)
+            obs[20] = len(positions) / 5  # Position count ratio
+            
+            if positions:
+                total_profit = sum(pos.get('profit', 0) for pos in positions)
+                obs[21] = total_profit / 100  # Unrealized P&L
+                
+            # Account info
+            account_info = self.mt5_interface.get_account_info()
+            if account_info:
+                obs[22] = account_info.get('equity', 0) / account_info.get('balance', 1)
+                
+            # เติมข้อมูลอื่นๆ ตามต้องการ...
+            
+            # Clip ค่าให้อยู่ในช่วงที่กำหนด
+            obs = np.clip(obs, -10.0, 10.0)
+            
+            return obs
+            
+        except Exception as e:
+            self.log_message(f"❌ Live observation error: {e}", "ERROR")
+            return None
+
+
+    def _calculate_risk_based_position_size(self):
+        """
+        💰 คำนวณขนาด position ตาม risk management
+        
+        เชื่อมกับ:
+        - self.risk_per_trade_var (GUI) - % risk ต่อการเทรด
+        - self.mt5_interface - ข้อมูล account balance
+        - self.config - ขนาด lot พื้นฐาน
+        
+        หน้าที่:
+        1. ดึง account balance ปัจจุบัน
+        2. คำนวณเงินที่เสี่ยงได้ต่อ trade
+        3. แปลงเป็นขนาด lot ที่เหมาะสม
+        4. ตรวจสอบขีดจำกัดต่างๆ
+        """
+        try:
+            # ดึงข้อมูล account
+            account_info = self.mt5_interface.get_account_info()
+            if not account_info:
+                return 0.0
+                
+            balance = account_info.get('balance', 0)
+            if balance <= 0:
+                return 0.0
+                
+            # คำนวณเงินที่เสี่ยงได้
+            risk_per_trade_pct = self.risk_per_trade_var.get()
+            risk_amount = balance * (risk_per_trade_pct / 100)
+            
+            self.log_message(f"💰 Balance: ${balance:.2f}, Risk amount: ${risk_amount:.2f}", "INFO")
+            
+            # แปลงเป็น lot size
+            # สำหรับ Gold: 1 lot = 100 oz, $1 per pip per 0.01 lot
+            # Stop loss assumption: 20 pips
+            assumed_sl_pips = 20
+            lot_size = risk_amount / (assumed_sl_pips * 100)  # 100 = $1 per pip per 0.01 lot
+            
+            # ปรับให้เป็น 0.01 increments
+            lot_size = round(lot_size / 0.01) * 0.01
+            
+            # จำกัดขนาด lot
+            min_lot = 0.01
+            max_lot = self.config.get('max_lot_size', 0.10)
+            
+            lot_size = max(min_lot, min(lot_size, max_lot))
+            
+            self.log_message(f"📊 Calculated lot size: {lot_size:.2f}", "INFO")
+            
+            return lot_size
+            
+        except Exception as e:
+            self.log_message(f"❌ Position size calculation error: {e}", "ERROR")
+            return 0.0
+    
     def stop_trading(self):
         """Stop live trading"""
-        self.is_trading = False
-        self.start_trading_btn.config(state='normal')
-        self.stop_trading_btn.config(state='disabled')
-        self.log_message("⏹️ Recovery trading stopped", "INFO")
+        try:
+            self.is_trading = False
+            self.start_trading_btn.config(state='normal')
+            self.stop_trading_btn.config(state='disabled')
+            
+            # ⭐ รีเซ็ต trading session
+            self._reset_trading_session()
+            
+            self.log_message("⏹️ Recovery trading stopped", "INFO")
+            
+        except Exception as e:
+            self.log_message(f"❌ Stop trading error: {e}", "ERROR")
 
     def stop_training(self):
         """Stop training"""
@@ -764,14 +1138,110 @@ class TradingGUI:
                 for pos in positions:
                     self.mt5_interface.close_position(pos.get('ticket'))
             
+            # ⭐ รีเซ็ต trading session
+            self._reset_trading_session()
+            
             self.reset_training_controls()
-            self.stop_trading()
+            self.start_trading_btn.config(state='normal')
+            self.stop_trading_btn.config(state='disabled')
             
             self.log_message("🛑 EMERGENCY STOP ACTIVATED", "ERROR")
             messagebox.showwarning("Emergency Stop", "All operations stopped!")
             
         except Exception as e:
             self.log_message(f"❌ Emergency stop error: {e}", "ERROR")
+    
+    def _reset_trading_session(self):
+        """
+        🔄 รีเซ็ต Trading Session
+        
+        เชื่อมกับ:
+        - stop_trading() method
+        - emergency_stop() method
+        
+        หน้าที่:
+        1. รีเซ็ตตัวแปรทั้งหมด
+        2. บันทึกผลการเทรดสุดท้าย
+        3. รีเซ็ต recovery state
+        """
+        try:
+            # บันทึกผลสุดท้าย
+            performance = self._calculate_session_performance()
+            
+            self.log_message(f"📊 Session Summary:", "INFO")
+            self.log_message(f"   Daily P&L: ${performance['daily_pnl']:.2f} ({performance['daily_pnl_pct']:.2f}%)", "INFO")
+            self.log_message(f"   Max Drawdown: ${performance['drawdown']:.2f} ({performance['drawdown_pct']:.2f}%)", "INFO")
+            self.log_message(f"   Total Trades: {self.total_trades_today}", "INFO")
+            
+            if self.total_trades_today > 0:
+                win_rate = (self.winning_trades_today / self.total_trades_today) * 100
+                self.log_message(f"   Win Rate: {self.winning_trades_today}/{self.total_trades_today} ({win_rate:.1f}%)", "INFO")
+            
+            # รีเซ็ตตัวแปร
+            self.current_step = 0
+            self.trading_session_start = None
+            self.in_recovery_mode = False
+            self.recovery_level = 0
+            
+        except Exception as e:
+            self.log_message(f"❌ Session reset error: {e}", "ERROR")
+    
+    def _calculate_session_performance(self):
+        """
+        📊 คำนวณผลการเทรดในวันนี้
+        
+        เชื่อมกับ:
+        - MT5 account info
+        - Session start balance
+        
+        หน้าที่:
+        1. คำนวณ daily P&L
+        2. คำนวณ drawdown
+        3. อัพเดท performance metrics
+        4. Return performance summary
+        """
+        try:
+            if not self.mt5_interface or self.session_start_balance == 0:
+                return {
+                    'daily_pnl': 0.0,
+                    'daily_pnl_pct': 0.0,
+                    'drawdown': 0.0,
+                    'drawdown_pct': 0.0
+                }
+            
+            # ดึง balance ปัจจุบัน
+            account_info = self.mt5_interface.get_account_info()
+            if not account_info:
+                return {'daily_pnl': 0.0, 'daily_pnl_pct': 0.0, 'drawdown': 0.0, 'drawdown_pct': 0.0}
+            
+            current_balance = account_info.get('balance', 0.0)
+            current_equity = account_info.get('equity', 0.0)
+            
+            # คำนวณ daily P&L
+            self.daily_pnl = current_balance - self.session_start_balance
+            daily_pnl_pct = (self.daily_pnl / self.session_start_balance) * 100 if self.session_start_balance > 0 else 0
+            
+            # คำนวณ drawdown
+            drawdown = min(0, self.daily_pnl)
+            drawdown_pct = (drawdown / self.session_start_balance) * 100 if self.session_start_balance > 0 else 0
+            
+            # อัพเดท max drawdown
+            if drawdown < self.max_drawdown_today:
+                self.max_drawdown_today = drawdown
+            
+            return {
+                'daily_pnl': self.daily_pnl,
+                'daily_pnl_pct': daily_pnl_pct,
+                'drawdown': self.max_drawdown_today,
+                'drawdown_pct': (self.max_drawdown_today / self.session_start_balance) * 100 if self.session_start_balance > 0 else 0,
+                'current_balance': current_balance,
+                'current_equity': current_equity
+            }
+            
+        except Exception as e:
+            self.log_message(f"❌ Performance calculation error: {e}", "ERROR")
+            return {'daily_pnl': 0.0, 'daily_pnl_pct': 0.0, 'drawdown': 0.0, 'drawdown_pct': 0.0}
+
 
     def reset_training_controls(self):
         """Reset training control states"""
@@ -986,3 +1456,354 @@ class TradingGUI:
         except Exception as e:
             print(f"GUI run error: {e}")
             raise e
+        
+    def _check_recovery_mode(self):
+        """
+        🔄 ตรวจสอบและจัดการ Recovery Mode
+        
+        เชื่อมกับ:
+        - self.environment - recovery state variables
+        - self.mt5_interface - current positions และ P&L
+        - self.recovery_threshold_var (GUI) - จุดเริ่ม recovery
+        
+        หน้าที่:
+        1. คำนวณ unrealized P&L รวม
+        2. ตรวจสอบว่าควรเริ่ม recovery mode หรือไม่
+        3. อัพเดท recovery level และ status
+        4. แสดงสถานะ recovery ใน log
+        """
+        try:
+            if not self.mt5_interface:
+                return
+                
+            # ดึงข้อมูล positions ปัจจุบัน
+            positions = self.mt5_interface.get_positions()
+            total_unrealized_pnl = sum(pos.get('profit', 0) for pos in positions)
+            
+            # ดึงค่า recovery threshold จาก GUI
+            recovery_threshold = self.recovery_threshold_var.get()  # เช่น -35.0
+            
+            # ตรวจสอบเงื่อนไข recovery
+            should_enter_recovery = total_unrealized_pnl <= recovery_threshold
+            
+            # จัดการ recovery state
+            if hasattr(self, 'in_recovery_mode'):
+                current_recovery = self.in_recovery_mode
+            else:
+                self.in_recovery_mode = False
+                self.recovery_level = 0
+                current_recovery = False
+            
+            # เริ่ม recovery mode
+            if should_enter_recovery and not current_recovery:
+                self.in_recovery_mode = True
+                self.recovery_level = 1
+                self.recovery_start_pnl = total_unrealized_pnl
+                self.log_message(f"🔄 RECOVERY MODE ACTIVATED - P&L: ${total_unrealized_pnl:.2f}", "WARNING")
+                self.log_message(f"🎯 Recovery threshold: ${recovery_threshold:.2f}", "INFO")
+                
+            # อัพเดท recovery level
+            elif self.in_recovery_mode:
+                # เพิ่ม recovery level หาก P&L แย่ลง
+                if total_unrealized_pnl < self.recovery_start_pnl - 20:  # ทุกๆ $20 ที่แย่ลง
+                    max_recovery = self.max_recovery_levels_var.get()
+                    if self.recovery_level < max_recovery:
+                        self.recovery_level += 1
+                        self.log_message(f"⬆️ Recovery Level increased to {self.recovery_level}/{max_recovery}", "WARNING")
+                        
+                # ตรวจสอบการออกจาก recovery mode
+                if total_unrealized_pnl >= -5:  # P&L กลับมาใกล้ break-even
+                    self.in_recovery_mode = False
+                    self.recovery_level = 0
+                    self.log_message(f"✅ RECOVERY SUCCESSFUL - P&L: ${total_unrealized_pnl:.2f}", "SUCCESS")
+                    
+            # แสดงสถานะ recovery
+            if self.in_recovery_mode:
+                max_recovery = self.max_recovery_levels_var.get()
+                self.log_message(f"🔄 Recovery Mode: Level {self.recovery_level}/{max_recovery} | P&L: ${total_unrealized_pnl:.2f}", "INFO")
+                
+        except Exception as e:
+            self.log_message(f"❌ Recovery mode check error: {e}", "ERROR")
+
+
+    def _execute_ai_trade(self, action_type, position_size, predicted_action):
+        """
+        ⚡ ส่งคำสั่งเทรดจริงตาม AI decision
+        
+        เชื่อมกับ:
+        - self.mt5_interface - ส่งคำสั่งไปยัง MT5
+        - self.stop_loss_pips_var (GUI) - ค่า stop loss
+        - predicted_action - ข้อมูลจาก AI model
+        
+        หน้าที่:
+        1. เตรียมพารามิเตอร์การเทรด
+        2. คำนวณ stop loss และ take profit
+        3. ส่งคำสั่งไปยัง MT5
+        4. ตรวจสอบผลการเทรดและ log
+        """
+        try:
+            symbol = self.config.get('symbol', 'XAUUSD')
+            
+            # ดึงราคาปัจจุบัน
+            current_price = self.mt5_interface.get_current_price(symbol)
+            if not current_price:
+                self.log_message("❌ Cannot get current price for trading", "ERROR")
+                return False
+                
+            # เตรียมพารามิเตอร์
+            sl_pips = self.stop_loss_pips_var.get()
+            
+            if action_type == 1:  # BUY
+                order_type = "buy"
+                entry_price = current_price['ask']
+                sl_price = entry_price - (sl_pips * 0.01) if sl_pips > 0 else None
+                tp_price = entry_price + (sl_pips * 2 * 0.01) if sl_pips > 0 else None  # 1:2 Risk:Reward
+                
+                self.log_message(f"🟢 BUY Signal: {position_size} lots at ${entry_price:.2f}", "INFO")
+                
+            elif action_type == 2:  # SELL
+                order_type = "sell"
+                entry_price = current_price['bid']
+                sl_price = entry_price + (sl_pips * 0.01) if sl_pips > 0 else None
+                tp_price = entry_price - (sl_pips * 2 * 0.01) if sl_pips > 0 else None  # 1:2 Risk:Reward
+                
+                self.log_message(f"🔴 SELL Signal: {position_size} lots at ${entry_price:.2f}", "INFO")
+                
+            else:
+                self.log_message(f"❌ Unknown action type: {action_type}", "ERROR")
+                return False
+            
+            # ปรับขนาด position หาก recovery mode
+            if hasattr(self, 'in_recovery_mode') and self.in_recovery_mode:
+                recovery_multiplier = self.recovery_multiplier_var.get()
+                original_size = position_size
+                position_size = position_size * (recovery_multiplier ** self.recovery_level)
+                
+                # จำกัดขนาดสูงสุด
+                max_lot = self.max_lot_size_var.get()
+                position_size = min(position_size, max_lot)
+                
+                self.log_message(f"🔄 Recovery Mode: {original_size:.2f} → {position_size:.2f} lots (Level {self.recovery_level})", "WARNING")
+            
+            # ส่งคำสั่งเทรด
+            self.log_message(f"📤 Sending {order_type.upper()} order to MT5...", "INFO")
+            
+            success = self.mt5_interface.place_order(
+                symbol=symbol,
+                order_type=order_type,
+                volume=position_size,
+                price=entry_price,
+                sl=sl_price,
+                tp=tp_price,
+                comment="AI Recovery Trading"
+            )
+            
+            if success:
+                self.log_message(f"✅ Order executed successfully!", "SUCCESS")
+                
+                # Log รายละเอียด
+                if sl_price:
+                    self.log_message(f"   Stop Loss: ${sl_price:.2f} ({sl_pips} pips)", "INFO")
+                if tp_price:
+                    self.log_message(f"   Take Profit: ${tp_price:.2f} ({sl_pips*2} pips)", "INFO")
+                    
+                return True
+            else:
+                error_msg = self.mt5_interface.get_last_error()
+                self.log_message(f"❌ Order failed: {error_msg}", "ERROR")
+                return False
+                
+        except Exception as e:
+            self.log_message(f"❌ Execute trade error: {e}", "ERROR")
+            return False
+
+
+    def _close_all_positions(self):
+        """
+        🚪 ปิด positions ทั้งหมด
+        
+        เชื่อมกับ:
+        - self.mt5_interface - ดึงและปิด positions
+        
+        หน้าที่:
+        1. ดึงรายการ positions ทั้งหมด
+        2. ปิดทีละ position
+        3. นับจำนวนที่ปิดสำเร็จ
+        4. รีเซ็ต recovery mode หากจำเป็น
+        """
+        try:
+            if not self.mt5_interface:
+                return 0
+                
+            positions = self.mt5_interface.get_positions()
+            if not positions:
+                self.log_message("ℹ️ No positions to close", "INFO")
+                return 0
+                
+            self.log_message(f"🚪 Closing {len(positions)} positions...", "INFO")
+            
+            closed_count = 0
+            total_profit = 0
+            
+            for position in positions:
+                ticket = position.get('ticket')
+                profit = position.get('profit', 0)
+                symbol = position.get('symbol', '')
+                volume = position.get('volume', 0)
+                
+                self.log_message(f"   Closing: {symbol} {volume} lots (P&L: ${profit:.2f})", "INFO")
+                
+                success = self.mt5_interface.close_position(ticket)
+                
+                if success:
+                    closed_count += 1
+                    total_profit += profit
+                    self.log_message(f"   ✅ Position {ticket} closed", "SUCCESS")
+                else:
+                    error_msg = self.mt5_interface.get_last_error()
+                    self.log_message(f"   ❌ Failed to close {ticket}: {error_msg}", "ERROR")
+            
+            if closed_count > 0:
+                self.log_message(f"🏁 Closed {closed_count} positions, Total P&L: ${total_profit:.2f}", "SUCCESS")
+                
+                # รีเซ็ต recovery mode หากปิดทั้งหมด
+                if closed_count == len(positions) and hasattr(self, 'in_recovery_mode'):
+                    self.in_recovery_mode = False
+                    self.recovery_level = 0
+                    self.log_message("🔄 Recovery mode reset", "INFO")
+            
+            return closed_count
+            
+        except Exception as e:
+            self.log_message(f"❌ Close all positions error: {e}", "ERROR")
+            return 0
+
+
+    def _monitor_open_positions(self):
+        """
+        👁️ ตรวจสอบ positions ที่เปิดอยู่
+        
+        เชื่อมกับ:
+        - self.mt5_interface - ข้อมูล positions
+        - GUI recovery status display
+        
+        หน้าที่:
+        1. ดึงข้อมูล positions ปัจจุบัน
+        2. คำนวณ P&L รวม
+        3. ตรวจสอบ positions ที่มี risk สูง
+        4. อัพเดทสถานะใน GUI
+        """
+        try:
+            if not self.mt5_interface:
+                return
+                
+            positions = self.mt5_interface.get_positions()
+            
+            if not positions:
+                return
+                
+            total_profit = 0
+            risk_positions = []
+            
+            for position in positions:
+                profit = position.get('profit', 0)
+                symbol = position.get('symbol', '')
+                volume = position.get('volume', 0)
+                total_profit += profit
+                
+                # ตรวจสอบ positions ที่ขาดทุนเกิน threshold
+                if profit < -50:  # ขาดทุนเกิน $50
+                    risk_positions.append({
+                        'symbol': symbol,
+                        'volume': volume,
+                        'profit': profit,
+                        'ticket': position.get('ticket')
+                    })
+            
+            # แสดง warning สำหรับ positions เสี่ยง
+            if risk_positions:
+                self.log_message(f"⚠️ {len(risk_positions)} high-risk positions (loss > $50)", "WARNING")
+                for pos in risk_positions:
+                    self.log_message(f"   🔻 {pos['symbol']} {pos['volume']} lots: ${pos['profit']:.2f}", "WARNING")
+            
+            # อัพเดท recovery status ใน GUI
+            self._update_recovery_display(total_profit, len(positions))
+            
+        except Exception as e:
+            self.log_message(f"❌ Monitor positions error: {e}", "ERROR")
+
+
+    def _update_recovery_display(self, total_pnl, position_count):
+        """
+        🖥️ อัพเดทการแสดงผล recovery status ใน GUI
+        
+        เชื่อมกับ:
+        - GUI labels (recovery_mode_label, total_pnl_label, etc.)
+        
+        หน้าที่:
+        1. อัพเดทสี recovery mode indicator
+        2. แสดง P&L ปัจจุบัน
+        3. แสดง recovery level
+        4. อัพเดทจำนวน positions
+        """
+        try:
+            # อัพเดท Recovery Mode Status
+            if hasattr(self, 'in_recovery_mode') and self.in_recovery_mode:
+                recovery_text = f"🔄 RECOVERY L{self.recovery_level}"
+                recovery_color = 'red'
+            else:
+                recovery_text = "🟢 Normal"
+                recovery_color = 'green'
+                
+            if hasattr(self, 'recovery_mode_label'):
+                self.recovery_mode_label.config(text=recovery_text, foreground=recovery_color)
+            
+            # อัพเดท Total P&L
+            pnl_color = 'green' if total_pnl >= 0 else 'red'
+            if hasattr(self, 'total_pnl_label'):
+                self.total_pnl_label.config(text=f"${total_pnl:.2f}", foreground=pnl_color)
+            
+            # อัพเดท Position Count
+            if hasattr(self, 'positions_label'):
+                self.positions_label.config(text=str(position_count))
+            
+            # อัพเดท Recovery Level
+            if hasattr(self, 'recovery_level_label'):
+                max_recovery = self.max_recovery_levels_var.get()
+                level_text = f"{getattr(self, 'recovery_level', 0)}/{max_recovery}"
+                self.recovery_level_label.config(text=level_text)
+                
+        except Exception as e:
+            # Silent fail for GUI updates
+            pass
+    
+    def _update_trade_statistics(self, trade_result):
+        """
+        📈 อัพเดท trading statistics
+        
+        เชื่อมกับ:
+        - _execute_ai_trade() method
+        - _close_all_positions() method
+        
+        หน้าที่:
+        1. นับจำนวน trades
+        2. แยก winning/losing trades
+        3. อัพเดท win rate
+        """
+        try:
+            self.total_trades_today += 1
+            
+            if trade_result > 0:
+                self.winning_trades_today += 1
+                self.log_message(f"✅ Winning trade #{self.total_trades_today}: ${trade_result:.2f}", "SUCCESS")
+            elif trade_result < 0:
+                self.losing_trades_today += 1
+                self.log_message(f"❌ Losing trade #{self.total_trades_today}: ${trade_result:.2f}", "ERROR")
+            
+            # คำนวณ win rate
+            if self.total_trades_today > 0:
+                win_rate = (self.winning_trades_today / self.total_trades_today) * 100
+                self.log_message(f"📊 Today's Win Rate: {self.winning_trades_today}/{self.total_trades_today} ({win_rate:.1f}%)", "INFO")
+            
+        except Exception as e:
+            self.log_message(f"❌ Statistics update error: {e}", "ERROR")

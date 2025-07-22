@@ -6,7 +6,7 @@ from datetime import datetime, time
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
-
+from core.mt5_connector import MT5Connector
 class MarketRegime(Enum):
     """
     📊 ประเภทสภาวะตลาด - ใช้สำหรับจำแนกสถานการณ์ตลาด
@@ -163,39 +163,45 @@ class MarketAnalyzer:
 
     def _get_market_data(self, symbol: str) -> Optional[Dict]:
         """
-        📈 ดึงข้อมูลตลาด - Real-time Version (แก้ไขแล้ว)
+        📈 ดึงข้อมูลตลาด - Fixed numpy array handling
         """
         try:
             if not self.mt5_interface:
                 print("⚠️ No MT5 interface available")
                 return None
             
-            # 🔥 ลดความต้องการข้อมูล จาก 200 → 50 เทียน
-            required_candles = 50  # แทนที่ 200
-            min_acceptable = 15    # แทนที่ 50
+            # ลดความต้องการข้อมูล จาก 200 → 50 เทียน
+            required_candles = 50
+            min_acceptable = 15
             
             print(f"📊 Requesting {required_candles} candles for {symbol}...")
             
             # ดึงข้อมูลเทียน M5
             rates = self.mt5_interface.get_rates(symbol, 5, required_candles)
             
-            # 🔥 ผ่อนปรนเงื่อนไข
-            if not rates:
+            # 🔥 FIX: Handle numpy array properly
+            if rates is None:
                 print("❌ No rates data received from MT5")
                 return None
+            
+            # Check if numpy array is empty
+            import numpy as np
+            if isinstance(rates, np.ndarray):
+                actual_candles = len(rates)
+                print(f"📊 Received {actual_candles} candles (numpy array)")
                 
-            actual_candles = len(rates)
-            print(f"📊 Received {actual_candles} candles")
-            
-            if actual_candles < min_acceptable:
-                print(f"❌ Insufficient data: {actual_candles} candles (need {min_acceptable}+ minimum)")
-                return None
-            
-            # แสดงสถานะข้อมูล
-            if actual_candles < required_candles:
-                print(f"⚠️ Limited data: {actual_candles}/{required_candles} candles (acceptable)")
+                if actual_candles < min_acceptable:
+                    print(f"❌ Insufficient data: {actual_candles} candles (need {min_acceptable}+ minimum)")
+                    return None
+                
+                # แสดงสถานะข้อมูล
+                if actual_candles < required_candles:
+                    print(f"⚠️ Limited data: {actual_candles}/{required_candles} candles (acceptable)")
+                else:
+                    print(f"✅ Sufficient data: {actual_candles} candles")
             else:
-                print(f"✅ Sufficient data: {actual_candles} candles")
+                print(f"❌ Unexpected data type: {type(rates)}")
+                return None
             
             # ดึงราคาปัจจุบัน
             current_price = self.mt5_interface.get_current_price(symbol)
@@ -206,10 +212,23 @@ class MarketAnalyzer:
             print(f"💰 Current price: ${current_price['bid']:.2f}")
             
             # แปลงเป็น DataFrame
+            import pandas as pd
             df = pd.DataFrame(rates)
+            
+            # 🔥 FIX: Set proper column names for MT5 data structure
+            # MT5 returns: (time, open, high, low, close, tick_volume, spread, real_volume)
+            if len(df.columns) >= 8:
+                df.columns = ['time', 'open', 'high', 'low', 'close', 'tick_volume', 'spread', 'real_volume']
+            elif len(df.columns) >= 6:
+                df.columns = ['time', 'open', 'high', 'low', 'close', 'tick_volume']
+            else:
+                print(f"❌ Unexpected data structure: {len(df.columns)} columns")
+                return None
+            
+            # Convert time to datetime
             df['time'] = pd.to_datetime(df['time'], unit='s')
             
-            # 🔥 คำนวณ indicators แบบ flexible
+            # คำนวณ indicators แบบ flexible
             df = self._calculate_basic_indicators(df)
             
             return {
@@ -222,17 +241,13 @@ class MarketAnalyzer:
             
         except Exception as e:
             print(f"❌ Get market data error: {e}")
+            import traceback
+            traceback.print_exc()
             return None
-    
+        
     def _calculate_basic_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        📊 คำนวณ Technical Indicators พื้นฐาน
-        
-        หน้าที่:
-        1. ATR (Average True Range) - วัดความผันผวน
-        2. SMA/EMA - วัดเทรนด์
-        3. RSI - วัด momentum
-        4. Bollinger Bands - วัดช่วงราคา
+        📊 คำนวณ Technical Indicators พื้นฐาน - Fixed for edge cases
         """
         try:
             data_length = len(df)
@@ -242,7 +257,7 @@ class MarketAnalyzer:
                 print("⚠️ Very limited data - using basic calculations")
                 return df
             
-            # 🔥 ปรับ periods ตามข้อมูลที่มี
+            # ปรับ periods ตามข้อมูลที่มี
             atr_period = min(14, max(3, data_length - 2))
             sma20_period = min(20, max(5, data_length - 2))
             sma50_period = min(50, max(10, data_length - 2))
@@ -251,31 +266,45 @@ class MarketAnalyzer:
             
             print(f"📊 Using periods - ATR:{atr_period}, SMA20:{sma20_period}, SMA50:{sma50_period}")
             
+            # 🔥 FIX: Ensure we have numeric data
+            numeric_columns = ['open', 'high', 'low', 'close', 'tick_volume']
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
             # ATR (Average True Range)
             try:
                 df['high_low'] = df['high'] - df['low']
-                df['high_close'] = abs(df['high'] - df['close'].shift())
-                df['low_close'] = abs(df['low'] - df['close'].shift())
+                df['high_close'] = abs(df['high'] - df['close'].shift(1))
+                df['low_close'] = abs(df['low'] - df['close'].shift(1))
                 df['true_range'] = df[['high_low', 'high_close', 'low_close']].max(axis=1)
                 df['atr_14'] = df['true_range'].rolling(atr_period).mean()
+                
+                # 🔥 FIX: Handle NaN values
+                df['atr_14'] = df['atr_14'].fillna(df['high_low'].rolling(3).mean())
                 print(f"✅ ATR calculated (period: {atr_period})")
+                
             except Exception as e:
                 print(f"⚠️ ATR calculation error: {e}")
                 # Simple fallback
-                df['atr_14'] = df['high'] - df['low']
+                df['atr_14'] = (df['high'] - df['low']).rolling(3).mean()
             
             # Moving Averages
             try:
                 df['sma_20'] = df['close'].rolling(sma20_period).mean()
+                df['sma_20'] = df['sma_20'].fillna(df['close'])  # Fill NaN with current close
                 print(f"✅ SMA20 calculated (period: {sma20_period})")
             except Exception as e:
                 print(f"⚠️ SMA20 calculation error: {e}")
+                df['sma_20'] = df['close']  # Fallback to close price
                 
             try:
                 df['sma_50'] = df['close'].rolling(sma50_period).mean()
+                df['sma_50'] = df['sma_50'].fillna(df['close'])  # Fill NaN with current close
                 print(f"✅ SMA50 calculated (period: {sma50_period})")
             except Exception as e:
                 print(f"⚠️ SMA50 calculation error: {e}")
+                df['sma_50'] = df['close']  # Fallback to close price
             
             # EMA
             try:
@@ -283,9 +312,15 @@ class MarketAnalyzer:
                 ema26_span = min(26, max(5, data_length - 1))
                 df['ema_12'] = df['close'].ewm(span=ema12_span).mean()
                 df['ema_26'] = df['close'].ewm(span=ema26_span).mean()
+                
+                # Fill NaN values
+                df['ema_12'] = df['ema_12'].fillna(df['close'])
+                df['ema_26'] = df['ema_26'].fillna(df['close'])
                 print(f"✅ EMA calculated (spans: {ema12_span}, {ema26_span})")
             except Exception as e:
                 print(f"⚠️ EMA calculation error: {e}")
+                df['ema_12'] = df['close']
+                df['ema_26'] = df['close']
             
             # RSI
             try:
@@ -293,11 +328,17 @@ class MarketAnalyzer:
                     delta = df['close'].diff()
                     gain = delta.where(delta > 0, 0).rolling(rsi_period).mean()
                     loss = -delta.where(delta < 0, 0).rolling(rsi_period).mean()
-                    rs = gain / loss
+                    
+                    # 🔥 FIX: Handle division by zero
+                    rs = gain / loss.replace(0, 0.01)  # Avoid division by zero
                     df['rsi'] = 100 - (100 / (1 + rs))
+                    df['rsi'] = df['rsi'].fillna(50)  # Fill NaN with neutral RSI
                     print(f"✅ RSI calculated (period: {rsi_period})")
+                else:
+                    df['rsi'] = 50  # Neutral RSI for insufficient data
             except Exception as e:
                 print(f"⚠️ RSI calculation error: {e}")
+                df['rsi'] = 50
             
             # Bollinger Bands
             try:
@@ -305,17 +346,40 @@ class MarketAnalyzer:
                 bb_std = df['close'].rolling(bb_period).std()
                 df['bb_upper'] = df['bb_middle'] + (2 * bb_std)
                 df['bb_lower'] = df['bb_middle'] - (2 * bb_std)
+                
+                # Fill NaN values
+                df['bb_middle'] = df['bb_middle'].fillna(df['close'])
+                df['bb_upper'] = df['bb_upper'].fillna(df['close'] * 1.01)
+                df['bb_lower'] = df['bb_lower'].fillna(df['close'] * 0.99)
                 print(f"✅ Bollinger Bands calculated (period: {bb_period})")
             except Exception as e:
                 print(f"⚠️ Bollinger Bands calculation error: {e}")
+                df['bb_middle'] = df['close']
+                df['bb_upper'] = df['close'] * 1.01
+                df['bb_lower'] = df['close'] * 0.99
+            
+            # 🔥 FIX: Final safety check - replace any remaining NaN values
+            numeric_indicator_columns = ['atr_14', 'sma_20', 'sma_50', 'ema_12', 'ema_26', 'rsi', 'bb_middle', 'bb_upper', 'bb_lower']
+            
+            for col in numeric_indicator_columns:
+                if col in df.columns:
+                    # Replace NaN with reasonable defaults
+                    if 'sma' in col or 'ema' in col or 'bb' in col:
+                        df[col] = df[col].fillna(df['close'])
+                    elif col == 'atr_14':
+                        df[col] = df[col].fillna((df['high'] - df['low']).mean())
+                    elif col == 'rsi':
+                        df[col] = df[col].fillna(50)
             
             print(f"✅ Indicators calculation completed")
             return df
             
         except Exception as e:
             print(f"❌ Calculate indicators error: {e}")
+            import traceback
+            traceback.print_exc()
             return df
-
+    
     def _analyze_volatility(self, market_data: Dict) -> Dict:
         """
         📈 วิเคราะห์ความผันผวน - ประเมินระดับความผันผวนของตลาด
@@ -760,7 +824,7 @@ class MarketAnalyzer:
                 MarketRegime.TRENDING_DOWN: ['mean_reversion', 'hedging_recovery', 'conservative_martingale'],
                 MarketRegime.RANGING: ['aggressive_grid', 'mean_reversion', 'hedging_recovery'],
                 MarketRegime.HIGH_VOLATILITY: ['emergency_recovery', 'hedging_recovery', 'news_based'],
-                MarketRegime.LOW_VOLATILITY: ['aggressive_grid', 'conservative_martingale', 'momentum_recovery'],
+                MarketRegime.LOW_VOLATILITY: ['conservative_trading', 'range_trading', 'swing_trading'],
                 MarketRegime.NEWS_IMPACT: ['news_based', 'emergency_recovery', 'hedging_recovery']
             }
             

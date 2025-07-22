@@ -364,7 +364,7 @@ class MT5Connector:
         try:
             self._rate_limit()
             
-            rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, count)
             if rates is None or len(rates) == 0:
                 return None
                 

@@ -907,7 +907,7 @@ class MarketAnalyzer:
             timestamp=datetime.now()
         )
 
-    def get_quick_analysis(self, symbol: str = "XAUUSD") -> str:
+    def get_quick_analysis(self, symbol: str = "XAUUSD.v") -> str:
         """
         ⚡ วิเคราะห์แบบย่อ - ให้ข้อมูลสำคัญแบบสั้นๆ
         

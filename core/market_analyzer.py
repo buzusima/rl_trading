@@ -160,26 +160,42 @@ class MarketAnalyzer:
             print(f"❌ Market analysis error: {e}")
             return self._create_default_context()
 
+
     def _get_market_data(self, symbol: str) -> Optional[Dict]:
         """
-        📈 ดึงข้อมูลตลาด - รวบรวมข้อมูล OHLCV และราคาปัจจุบัน
-        
-        หน้าที่:
-        1. ดึงข้อมูลเทียนย้อนหลัง 200 เทียน
-        2. ดึงราคาปัจจุบัน (bid/ask)
-        3. คำนวณ indicators พื้นฐาน
-        4. ตรวจสอบคุณภาพข้อมูล
+        📈 ดึงข้อมูลตลาด - Real-time Version (แก้ไขแล้ว)
         """
         try:
             if not self.mt5_interface:
                 print("⚠️ No MT5 interface available")
                 return None
             
-            # ดึงข้อมูลเทียน M5 ย้อนหลัง 200 เทียน
-            rates = self.mt5_interface.get_rates(symbol, 5, 200)  # M5, 200 candles
-            if not rates or len(rates) < 50:
-                print("❌ Insufficient historical data")
+            # 🔥 ลดความต้องการข้อมูล จาก 200 → 50 เทียน
+            required_candles = 50  # แทนที่ 200
+            min_acceptable = 15    # แทนที่ 50
+            
+            print(f"📊 Requesting {required_candles} candles for {symbol}...")
+            
+            # ดึงข้อมูลเทียน M5
+            rates = self.mt5_interface.get_rates(symbol, 5, required_candles)
+            
+            # 🔥 ผ่อนปรนเงื่อนไข
+            if not rates:
+                print("❌ No rates data received from MT5")
                 return None
+                
+            actual_candles = len(rates)
+            print(f"📊 Received {actual_candles} candles")
+            
+            if actual_candles < min_acceptable:
+                print(f"❌ Insufficient data: {actual_candles} candles (need {min_acceptable}+ minimum)")
+                return None
+            
+            # แสดงสถานะข้อมูล
+            if actual_candles < required_candles:
+                print(f"⚠️ Limited data: {actual_candles}/{required_candles} candles (acceptable)")
+            else:
+                print(f"✅ Sufficient data: {actual_candles} candles")
             
             # ดึงราคาปัจจุบัน
             current_price = self.mt5_interface.get_current_price(symbol)
@@ -187,11 +203,13 @@ class MarketAnalyzer:
                 print("❌ Cannot get current price")
                 return None
             
+            print(f"💰 Current price: ${current_price['bid']:.2f}")
+            
             # แปลงเป็น DataFrame
             df = pd.DataFrame(rates)
             df['time'] = pd.to_datetime(df['time'], unit='s')
             
-            # คำนวณ indicators พื้นฐาน
+            # 🔥 คำนวณ indicators แบบ flexible
             df = self._calculate_basic_indicators(df)
             
             return {
@@ -205,7 +223,7 @@ class MarketAnalyzer:
         except Exception as e:
             print(f"❌ Get market data error: {e}")
             return None
-
+    
     def _calculate_basic_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         📊 คำนวณ Technical Indicators พื้นฐาน
@@ -217,32 +235,81 @@ class MarketAnalyzer:
         4. Bollinger Bands - วัดช่วงราคา
         """
         try:
-            # ATR สำหรับวัดความผันผวน
-            df['high_low'] = df['high'] - df['low']
-            df['high_close'] = abs(df['high'] - df['close'].shift())
-            df['low_close'] = abs(df['low'] - df['close'].shift())
-            df['true_range'] = df[['high_low', 'high_close', 'low_close']].max(axis=1)
-            df['atr_14'] = df['true_range'].rolling(14).mean()
+            data_length = len(df)
+            print(f"📊 Calculating indicators with {data_length} candles")
             
-            # Moving Averages สำหรับวัดเทรนด์
-            df['sma_20'] = df['close'].rolling(20).mean()
-            df['sma_50'] = df['close'].rolling(50).mean()
-            df['ema_12'] = df['close'].ewm(span=12).mean()
-            df['ema_26'] = df['close'].ewm(span=26).mean()
+            if data_length < 5:
+                print("⚠️ Very limited data - using basic calculations")
+                return df
             
-            # RSI สำหรับวัด momentum
-            delta = df['close'].diff()
-            gain = delta.where(delta > 0, 0).rolling(14).mean()
-            loss = -delta.where(delta < 0, 0).rolling(14).mean()
-            rs = gain / loss
-            df['rsi'] = 100 - (100 / (1 + rs))
+            # 🔥 ปรับ periods ตามข้อมูลที่มี
+            atr_period = min(14, max(3, data_length - 2))
+            sma20_period = min(20, max(5, data_length - 2))
+            sma50_period = min(50, max(10, data_length - 2))
+            rsi_period = min(14, max(5, data_length - 2))
+            bb_period = min(20, max(5, data_length - 2))
+            
+            print(f"📊 Using periods - ATR:{atr_period}, SMA20:{sma20_period}, SMA50:{sma50_period}")
+            
+            # ATR (Average True Range)
+            try:
+                df['high_low'] = df['high'] - df['low']
+                df['high_close'] = abs(df['high'] - df['close'].shift())
+                df['low_close'] = abs(df['low'] - df['close'].shift())
+                df['true_range'] = df[['high_low', 'high_close', 'low_close']].max(axis=1)
+                df['atr_14'] = df['true_range'].rolling(atr_period).mean()
+                print(f"✅ ATR calculated (period: {atr_period})")
+            except Exception as e:
+                print(f"⚠️ ATR calculation error: {e}")
+                # Simple fallback
+                df['atr_14'] = df['high'] - df['low']
+            
+            # Moving Averages
+            try:
+                df['sma_20'] = df['close'].rolling(sma20_period).mean()
+                print(f"✅ SMA20 calculated (period: {sma20_period})")
+            except Exception as e:
+                print(f"⚠️ SMA20 calculation error: {e}")
+                
+            try:
+                df['sma_50'] = df['close'].rolling(sma50_period).mean()
+                print(f"✅ SMA50 calculated (period: {sma50_period})")
+            except Exception as e:
+                print(f"⚠️ SMA50 calculation error: {e}")
+            
+            # EMA
+            try:
+                ema12_span = min(12, max(3, data_length // 2))
+                ema26_span = min(26, max(5, data_length - 1))
+                df['ema_12'] = df['close'].ewm(span=ema12_span).mean()
+                df['ema_26'] = df['close'].ewm(span=ema26_span).mean()
+                print(f"✅ EMA calculated (spans: {ema12_span}, {ema26_span})")
+            except Exception as e:
+                print(f"⚠️ EMA calculation error: {e}")
+            
+            # RSI
+            try:
+                if data_length >= 10:
+                    delta = df['close'].diff()
+                    gain = delta.where(delta > 0, 0).rolling(rsi_period).mean()
+                    loss = -delta.where(delta < 0, 0).rolling(rsi_period).mean()
+                    rs = gain / loss
+                    df['rsi'] = 100 - (100 / (1 + rs))
+                    print(f"✅ RSI calculated (period: {rsi_period})")
+            except Exception as e:
+                print(f"⚠️ RSI calculation error: {e}")
             
             # Bollinger Bands
-            df['bb_middle'] = df['close'].rolling(20).mean()
-            bb_std = df['close'].rolling(20).std()
-            df['bb_upper'] = df['bb_middle'] + (2 * bb_std)
-            df['bb_lower'] = df['bb_middle'] - (2 * bb_std)
+            try:
+                df['bb_middle'] = df['close'].rolling(bb_period).mean()
+                bb_std = df['close'].rolling(bb_period).std()
+                df['bb_upper'] = df['bb_middle'] + (2 * bb_std)
+                df['bb_lower'] = df['bb_middle'] - (2 * bb_std)
+                print(f"✅ Bollinger Bands calculated (period: {bb_period})")
+            except Exception as e:
+                print(f"⚠️ Bollinger Bands calculation error: {e}")
             
+            print(f"✅ Indicators calculation completed")
             return df
             
         except Exception as e:

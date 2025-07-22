@@ -1608,37 +1608,65 @@ class TradingGUI:
         self.training_status_label.config(text="Ready for Recovery Training")
 
     def refresh_data_cache(self):
-        """Refresh historical data cache"""
+        """🔄 Real-time Data Update (แก้ไขแล้ว)"""
         try:
             if not self.is_connected:
                 messagebox.showwarning("Warning", "Please connect to MT5 first")
                 return
             
-            if self.data_loader is None:
-                from core.data_loader import HistoricalDataLoader
-                self.data_loader = HistoricalDataLoader(self.mt5_interface)
+            self.log_message("🔄 Starting real-time data update...", "INFO")
+            self.refresh_cache_btn.config(state='disabled', text="🔄 Updating...")
             
-            self.log_message("🔄 Refreshing data cache...", "INFO")
-            self.refresh_cache_btn.config(state='disabled', text="🔄 Refreshing...")
-            
-            # Run refresh in separate thread
-            def refresh_worker():
+            # 🔥 เริ่ม Real-time Auto-update
+            def start_realtime_worker():
                 try:
-                    success = self.data_loader.smart_load_data(force_refresh=True)
-                    if success:
-                        self.root.after(0, lambda: self.log_message("✅ Data cache refreshed", "SUCCESS"))
-                        self.root.after(0, self.update_cache_status)
+                    # สร้าง market analyzer real-time
+                    if not hasattr(self, 'market_analyzer'):
+                        from core.market_analyzer import MarketAnalyzer
+                        self.market_analyzer = MarketAnalyzer(self.mt5_interface, self.config)
+                    
+                    # ทดสอบ analysis
+                    self.root.after(0, lambda: self.log_message("🧠 Testing market analysis...", "INFO"))
+                    
+                    context = self.market_analyzer.analyze_market()
+                    
+                    if context:
+                        # เริ่ม Auto-update Loop
+                        self.root.after(0, self._start_auto_update_loop)
+                        
+                        # Update GUI
+                        def update_success():
+                            self.cache_status_label.config(text="🔴 Real-time Active", foreground='red')
+                            self.refresh_cache_btn.config(state='normal', text="⏹️ Stop Real-time")
+                            self.refresh_cache_btn.config(command=self.stop_realtime_update)
+                            self.log_message("✅ Real-time data active", "SUCCESS")
+                            
+                            # แสดง market context
+                            regime = context.regime.value.upper()
+                            session = context.session.value.upper()
+                            confidence = context.confidence_score
+                            self.log_message(f"📊 Market: {regime} | {session} | Conf: {confidence:.2f}", "INFO")
+                        
+                        self.root.after(0, update_success)
                     else:
-                        self.root.after(0, lambda: self.log_message("❌ Cache refresh failed", "ERROR"))
+                        def update_error():
+                            self.refresh_cache_btn.config(state='normal', text="🔄 Refresh Data Cache")
+                            self.log_message("❌ Market analysis failed", "ERROR")
+                        
+                        self.root.after(0, update_error)
+                        
                 except Exception as e:
-                    self.root.after(0, lambda: self.log_message(f"❌ Cache refresh error: {e}", "ERROR"))
-                finally:
-                    self.root.after(0, lambda: self.refresh_cache_btn.config(state='normal', text="🔄 Refresh Data Cache"))
+                    def update_error():
+                        self.refresh_cache_btn.config(state='normal', text="🔄 Refresh Data Cache") 
+                        self.log_message(f"❌ Real-time setup error: {e}", "ERROR")
+                    
+                    self.root.after(0, update_error)
             
-            threading.Thread(target=refresh_worker, daemon=True).start()
+            threading.Thread(target=start_realtime_worker, daemon=True).start()
             
         except Exception as e:
             self.log_message(f"❌ Refresh cache error: {e}", "ERROR")
+            self.refresh_cache_btn.config(state='normal', text="🔄 Refresh Data Cache")
 
     def update_cache_status(self):
         """Update cache status display"""
@@ -1796,6 +1824,96 @@ class TradingGUI:
             print(f"Closing error: {e}")
         finally:
             self.root.destroy()
+
+    def stop_realtime_update(self):
+        """⏹️ หยุด Real-time Update"""
+        try:
+            self.realtime_active = False
+            self.cache_status_label.config(text="⏹️ Stopped", foreground='gray')
+            self.refresh_cache_btn.config(text="🔄 Start Real-time", command=self.refresh_data_cache)
+            self.log_message("⏹️ Real-time updates stopped", "INFO")
+            
+        except Exception as e:
+            self.log_message(f"❌ Stop real-time error: {e}", "ERROR")
+
+    def _start_auto_update_loop(self):
+        """🔄 เริ่ม Auto-update Loop"""
+        try:
+            if not hasattr(self, 'realtime_active'):
+                self.realtime_active = True
+            
+            if not hasattr(self, 'update_counter'):
+                self.update_counter = 0
+            
+            # เริ่ม auto-update ทันที
+            self._auto_update()
+            
+        except Exception as e:
+            self.log_message(f"❌ Start auto-update error: {e}", "ERROR")
+
+    def _auto_update(self):
+        """🔄 Auto-update Method"""
+        if hasattr(self, 'realtime_active') and self.realtime_active:
+            try:
+                self.update_counter += 1
+                
+                # อัปเดตทุก 30 วินาที
+                if self.update_counter % 6 == 0:  # 6 * 5 = 30 วินาที
+                    self._update_market_analysis()
+                
+                # อัปเดต status display
+                self._update_realtime_status()
+                
+                # Schedule ครั้งถัดไป (5 วินาที)
+                self.root.after(5000, self._auto_update)
+                
+            except Exception as e:
+                self.log_message(f"❌ Auto-update error: {e}", "ERROR")
+    
+    def _update_market_analysis(self):
+        """📊 อัปเดต Market Analysis"""
+        try:
+            if hasattr(self, 'market_analyzer'):
+                context = self.market_analyzer.analyze_market()
+                
+                if context:
+                    # Update cache status
+                    current_time = datetime.now().strftime("%H:%M:%S")
+                    self.cache_status_label.config(
+                        text=f"🔴 Live ({current_time})", 
+                        foreground='green'
+                    )
+                    
+                    # Log market update
+                    regime = context.regime.value.upper()
+                    vol = context.volatility_score
+                    trend = context.trend_strength
+                    
+                    if self.update_counter % 12 == 0:  # ทุก 1 นาที
+                        self.log_message(f"📊 Market: {regime} | Vol: {vol:.0f} | Trend: {trend:.0f}", "INFO")
+                    
+        except Exception as e:
+            if self.update_counter % 12 == 0:  # ไม่ spam error
+                self.log_message(f"⚠️ Market update error: {e}", "WARNING")
+
+    def _update_realtime_status(self):
+        """📡 อัปเดต Real-time Status"""
+        try:
+            if hasattr(self, 'realtime_active') and self.realtime_active:
+                # แสดงจำนวน updates
+                minutes = (self.update_counter * 5) // 60
+                seconds = (self.update_counter * 5) % 60
+                
+                if minutes > 0:
+                    uptime_text = f"{minutes}m {seconds}s"
+                else:
+                    uptime_text = f"{seconds}s"
+                
+                # อัปเดต button text
+                self.refresh_cache_btn.config(text=f"⏹️ Stop ({uptime_text})")
+                
+        except Exception as e:
+            pass  # Silent fail for status updates
 
     def run(self):
         """Run the GUI application"""

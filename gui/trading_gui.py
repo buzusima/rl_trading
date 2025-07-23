@@ -62,6 +62,15 @@ class TradingGUI:
         self.update_thread = None
         self.running = True
         
+        # ⭐ เพิ่ม Live Trading State Variables
+        self.live_trader = None
+        self.live_mode_enabled = False
+        self.live_session_active = False
+        
+        # ⭐ เพิ่ม Live Trading GUI Variables
+        self.live_mode_var = tk.BooleanVar(value=False)
+        self.live_confirmation_var = tk.BooleanVar(value=False)
+
         # Setup GUI
         self.setup_gui()
         
@@ -387,6 +396,509 @@ class TradingGUI:
         self.emergency_stop_btn = ttk.Button(trading_controls, text="🛑 EMERGENCY STOP", 
                                             command=self.emergency_stop)
         self.emergency_stop_btn.pack(side='right', padx=5)
+
+    # === LIVE TRADING SECTION === (เพิ่มใหม่)
+        live_frame = ttk.LabelFrame(self.main_frame, text="🔴 LIVE TRADING CONTROLS")
+        live_frame.pack(fill='x', padx=10, pady=5)
+        
+        # Live Mode Status Display
+        live_status_frame = ttk.Frame(live_frame)
+        live_status_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(live_status_frame, text="Live Status:", style='Thai.TLabel').pack(side='left')
+        self.live_status_label = ttk.Label(live_status_frame, text="🔒 DISABLED", foreground='gray', style='Thai.TLabel')
+        self.live_status_label.pack(side='left', padx=(10, 0))
+        
+        # Live Mode Controls
+        live_controls_frame = ttk.Frame(live_frame)
+        live_controls_frame.pack(fill='x', padx=10, pady=5)
+        
+        # Safety Warning
+        warning_frame = ttk.Frame(live_controls_frame)
+        warning_frame.pack(fill='x', pady=(0, 5))
+        
+        warning_label = ttk.Label(
+            warning_frame, 
+            text="⚠️ WARNING: Live trading uses REAL MONEY! Enable only if you understand the risks.",
+            foreground='red',
+            style='Comment.TLabel'
+        )
+        warning_label.pack(side='left')
+        
+        # Confirmation Checkbox
+        confirm_frame = ttk.Frame(live_controls_frame)
+        confirm_frame.pack(fill='x', pady=2)
+        
+        self.live_confirmation_checkbox = ttk.Checkbutton(
+            confirm_frame,
+            text="☑️ I understand this will trade with real money",
+            variable=self.live_confirmation_var,
+            style='Thai.TButton'
+        )
+        self.live_confirmation_checkbox.pack(side='left')
+        
+        # Enable/Disable Buttons
+        buttons_frame = ttk.Frame(live_controls_frame)
+        buttons_frame.pack(fill='x', pady=5)
+        
+        self.enable_live_btn = ttk.Button(
+            buttons_frame,
+            text="🔴 ENABLE LIVE TRADING",
+            command=self.enable_live_trading,
+            state='disabled',
+            style='Thai.TButton'
+        )
+        self.enable_live_btn.pack(side='left', padx=5)
+        
+        self.disable_live_btn = ttk.Button(
+            buttons_frame,
+            text="🔒 DISABLE LIVE TRADING",
+            command=self.disable_live_trading,
+            state='disabled',
+            style='Thai.TButton'
+        )
+        self.disable_live_btn.pack(side='left', padx=5)
+        
+        # Live Trading Statistics
+        live_stats_frame = ttk.LabelFrame(live_frame, text="📊 Live Session Stats")
+        live_stats_frame.pack(fill='x', padx=10, pady=5)
+        
+        stats_grid = ttk.Frame(live_stats_frame)
+        stats_grid.pack(fill='x', padx=10, pady=10)
+        
+        # Session P&L
+        ttk.Label(stats_grid, text="Session P&L:", style='Thai.TLabel').grid(row=0, column=0, sticky='w')
+        self.live_pnl_label = ttk.Label(stats_grid, text="$0.00", style='Thai.TLabel')
+        self.live_pnl_label.grid(row=0, column=1, sticky='w', padx=(10, 0))
+        
+        # Live Trades Count
+        ttk.Label(stats_grid, text="Live Trades:", style='Thai.TLabel').grid(row=1, column=0, sticky='w')
+        self.live_trades_label = ttk.Label(stats_grid, text="0", style='Thai.TLabel')
+        self.live_trades_label.grid(row=1, column=1, sticky='w', padx=(10, 0))
+        
+        # Live Volume
+        ttk.Label(stats_grid, text="Live Volume:", style='Thai.TLabel').grid(row=2, column=0, sticky='w')
+        self.live_volume_label = ttk.Label(stats_grid, text="0.00 lots", style='Thai.TLabel')
+        self.live_volume_label.grid(row=2, column=1, sticky='w', padx=(10, 0))
+        
+        # Daily Risk Usage
+        ttk.Label(stats_grid, text="Daily Risk Used:", style='Thai.TLabel').grid(row=0, column=2, sticky='w', padx=(20, 0))
+        self.daily_risk_label = ttk.Label(stats_grid, text="0.0%", style='Thai.TLabel')
+        self.daily_risk_label.grid(row=0, column=3, sticky='w', padx=(10, 0))
+        
+        # Session Duration
+        ttk.Label(stats_grid, text="Session Time:", style='Thai.TLabel').grid(row=1, column=2, sticky='w', padx=(20, 0))
+        self.session_time_label = ttk.Label(stats_grid, text="00:00:00", style='Thai.TLabel')
+        self.session_time_label.grid(row=1, column=3, sticky='w', padx=(10, 0))
+        
+        # Last Action
+        ttk.Label(stats_grid, text="Last Action:", style='Thai.TLabel').grid(row=2, column=2, sticky='w', padx=(20, 0))
+        self.last_action_label = ttk.Label(stats_grid, text="None", style='Thai.TLabel')
+        self.last_action_label.grid(row=2, column=3, sticky='w', padx=(10, 0))
+        
+        # Bind checkbox to enable/disable buttons
+        self.live_confirmation_var.trace('w', self.on_live_confirmation_change)
+
+    def on_live_confirmation_change(self, *args):
+        """เมื่อ user check confirmation checkbox"""
+        try:
+            if self.live_confirmation_var.get():
+                # User confirmed - enable the enable button
+                self.enable_live_btn.config(state='normal')
+            else:
+                # User unchecked - disable the enable button
+                self.enable_live_btn.config(state='disabled')
+        except Exception as e:
+            self.log_message(f"❌ Confirmation change error: {e}", "ERROR")
+
+    def enable_live_trading(self):
+        """🔴 เปิดใช้งาน Live Trading"""
+        try:
+            # ตรวจสอบเงื่อนไข
+            if not self.live_confirmation_var.get():
+                messagebox.showwarning("Warning", "Please confirm that you understand the risks first.")
+                return
+            
+            if not self.is_connected:
+                messagebox.showerror("Error", "Please connect to MT5 first.")
+                return
+                
+            if not self.environment:
+                messagebox.showerror("Error", "Please initialize trading system first.")
+                return
+            
+            if self.current_environment_type != "aggressive":
+                messagebox.showwarning("Warning", "Live trading is only available in Aggressive Mode.")
+                return
+            
+            # Final confirmation dialog
+            confirm = messagebox.askyesno(
+                "⚠️ LIVE TRADING CONFIRMATION",
+                "This will enable REAL MONEY trading!\n\n"
+                "• Real orders will be sent to MT5\n"
+                "• Real money will be at risk\n"
+                "• You are responsible for all trades\n\n"
+                "Are you absolutely sure?",
+                icon='warning'
+            )
+            
+            if not confirm:
+                return
+            
+            # สร้าง Live Trader
+            self.log_message("🔴 Initializing Live Trader...", "WARNING")
+            
+            # Import Live Trader
+            from core.live_trader import LiveTrader
+            
+            # สร้าง Live Trader instance
+            self.live_trader = LiveTrader(self.mt5_interface, self.config)
+            
+            # เปิดใช้งาน Live Trading
+            success = self.live_trader.enable_live_trading(confirmation=True)
+            
+            if success:
+                self.live_mode_enabled = True
+                self.live_session_active = True
+                
+                # อัปเดต UI
+                self.live_status_label.config(text="🔴 ENABLED", foreground='red')
+                self.enable_live_btn.config(state='disabled')
+                self.disable_live_btn.config(state='normal')
+                self.live_confirmation_checkbox.config(state='disabled')
+                
+                # เปลี่ยนสี background เป็นเตือน
+                self.root.configure(bg='#4a2c2c')  # Dark red background
+                
+                self.log_message("🔴 LIVE TRADING ENABLED - REAL MONEY MODE!", "ERROR")
+                self.log_message(f"   Account: {self.live_trader.session_start_balance:.2f}", "WARNING")
+                self.log_message(f"   Daily Limit: ${self.live_trader.daily_loss_limit:.0f}", "WARNING")
+                
+                # เริ่มอัปเดต Live Stats
+                self.start_live_stats_update()
+                
+            else:
+                messagebox.showerror("Error", "Failed to enable live trading. Check logs for details.")
+                
+        except Exception as e:
+            self.log_message(f"❌ Enable live trading error: {e}", "ERROR")
+            messagebox.showerror("Error", f"Failed to enable live trading: {e}")
+
+    def disable_live_trading(self):
+        """🔒 ปิดการใช้งาน Live Trading"""
+        try:
+            if not self.live_trader:
+                return
+            
+            # ยืนยันการปิด
+            confirm = messagebox.askyesno(
+                "Disable Live Trading",
+                "This will disable live trading.\n\n"
+                "Any open positions will remain open.\n"
+                "Continue?",
+                icon='question'
+            )
+            
+            if not confirm:
+                return
+            
+            # ปิด Live Trading
+            success = self.live_trader.disable_live_trading()
+            
+            if success:
+                self.live_mode_enabled = False
+                self.live_session_active = False
+                
+                # อัปเดต UI
+                self.live_status_label.config(text="🔒 DISABLED", foreground='gray')
+                self.enable_live_btn.config(state='normal')
+                self.disable_live_btn.config(state='disabled')
+                self.live_confirmation_checkbox.config(state='normal')
+                self.live_confirmation_var.set(False)
+                
+                # เปลี่ยน background กลับเป็นปกติ
+                self.root.configure(bg='#2b2b2b')
+                
+                self.log_message("🔒 Live Trading disabled", "INFO")
+                
+            else:
+                messagebox.showerror("Error", "Failed to disable live trading.")
+                
+        except Exception as e:
+            self.log_message(f"❌ Disable live trading error: {e}", "ERROR")
+
+    def start_live_stats_update(self):
+        """📊 เริ่มอัปเดต Live Trading Statistics"""
+        try:
+            if self.live_session_active and self.live_trader:
+                self.update_live_stats()
+                # Schedule next update
+                self.root.after(2000, self.start_live_stats_update)  # Update every 2 seconds
+        except Exception as e:
+            self.log_message(f"❌ Live stats update error: {e}", "ERROR")
+
+    def update_live_stats(self):
+        """📊 อัปเดต Live Trading Statistics"""
+        try:
+            if not self.live_trader:
+                return
+                
+            # ดึงสถานะ Live Trading
+            live_status = self.live_trader.get_live_status()
+            
+            # อัปเดต P&L
+            daily_pnl = live_status.get('daily_pnl', 0.0)
+            pnl_color = 'green' if daily_pnl >= 0 else 'red'
+            self.live_pnl_label.config(text=f"${daily_pnl:.2f}", foreground=pnl_color)
+            
+            # อัปเดต Trades Count
+            live_trades = live_status.get('live_trades_today', 0)
+            self.live_trades_label.config(text=str(live_trades))
+            
+            # อัปเดต Volume
+            live_volume = live_status.get('live_volume_today', 0.0)
+            self.live_volume_label.config(text=f"{live_volume:.2f} lots")
+            
+            # อัปเดต Daily Risk Usage
+            risk_used = live_status.get('daily_risk_used', 0.0)
+            risk_color = 'red' if risk_used > 80 else 'orange' if risk_used > 50 else 'green'
+            self.daily_risk_label.config(text=f"{risk_used:.1f}%", foreground=risk_color)
+            
+            # อัปเดต Session Duration
+            if live_status.get('session_start'):
+                from datetime import datetime
+                start_time = datetime.strptime(live_status['session_start'], '%H:%M:%S')
+                current_time = datetime.now()
+                duration = current_time - start_time.replace(year=current_time.year, 
+                                                        month=current_time.month, 
+                                                        day=current_time.day)
+                duration_str = str(duration).split('.')[0]  # Remove microseconds
+                self.session_time_label.config(text=duration_str)
+            
+        except Exception as e:
+            # Silent fail for stats updates
+            pass
+
+    def _aggressive_ai_trading_worker(self):
+        """⚡ Aggressive AI Trading Worker - เพิ่ม Live Trading Path"""
+        try:
+            import time
+            import numpy as np
+            from datetime import datetime
+            
+            # ตรวจสอบ Live Trading Mode
+            if self.live_mode_enabled and self.live_trader and self.live_trader.is_live_trading_enabled():
+                self.log_message("🔴 LIVE TRADING MODE - Using Live Trader", "ERROR")
+                trading_mode = "LIVE"
+            else:
+                self.log_message("🟢 SIMULATION MODE - Using AI Environment", "SUCCESS")
+                trading_mode = "SIMULATION"
+            
+            # Initialize AI trading session
+            self._initialize_trading_session()
+            
+            while self.is_trading and self.running:
+                try:
+                    if trading_mode == "LIVE":
+                        # 🔴 LIVE TRADING PATH
+                        self._execute_live_trading_cycle()
+                    else:
+                        # 🟢 SIMULATION PATH (เดิม)
+                        self._execute_simulation_cycle()
+                    
+                    self.current_step += 1
+                    
+                except Exception as cycle_error:
+                    self.log_message(f"❌ Trading cycle error: {cycle_error}", "ERROR")
+                    time.sleep(10)
+                    
+                # รอ 5 วินาที ก่อนรอบถัดไป
+                time.sleep(5)
+                
+        except Exception as e:
+            self.log_message(f"❌ Trading worker critical error: {e}", "ERROR")
+            self.emergency_stop()
+        
+        finally:
+            self.log_message("🏁 AI Trading Worker Stopped", "INFO")
+                    
+
+    def _execute_live_trading_cycle(self):
+        """🔴 Execute Live Trading Cycle"""
+        try:
+            # ใช้ AI Environment เพื่อได้ AI Decision
+            dummy_action = [0, 0.01, 30, 0]  # HOLD action for AI to decide
+            obs, reward, done, truncated, info = self.environment.step(dummy_action)
+            
+            # ดึง AI Decision จาก info
+            if info and 'current_ai_action' in info:
+                # สร้าง mock RecoveryDecision จาก environment info
+                ai_decision = self._create_recovery_decision_from_info(info)
+                
+                if ai_decision and ai_decision.action.name != 'HOLD':
+                    # ส่งไปยัง Live Trader
+                    live_result = self.live_trader.execute_ai_decision(ai_decision)
+                    
+                    # Log ผลการเทรดจริง
+                    self._log_live_trading_result(live_result, info)
+                    
+                    # อัปเดต last action display
+                    if hasattr(self, 'last_action_label'):
+                        action_text = f"{live_result.action_executed.name}"
+                        if live_result.volume_executed:
+                            action_text += f" ({live_result.volume_executed:.2f})"
+                        self.last_action_label.config(text=action_text)
+            
+            # Reset environment หาก episode จบ
+            if done:
+                self.environment.reset()
+                
+        except Exception as e:
+            self.log_message(f"❌ Live trading cycle error: {e}", "ERROR")
+
+    def _execute_simulation_cycle(self):
+        """🟢 Execute Simulation Cycle (เดิม)"""
+        try:
+            # AI Environment จัดการทุกอย่างเอง (โค้ดเดิม)
+            dummy_action = [0, 0.01, 30, 0]  # HOLD action
+            
+            obs, reward, done, truncated, info = self.environment.step(dummy_action)
+            
+            # แสดงข้อมูล AI Decision (เดิม)
+            if info and 'current_ai_action' in info:
+                ai_action = info['current_ai_action']
+                ai_strategy = info.get('current_ai_strategy', 'Unknown')
+                ai_confidence = info.get('current_ai_confidence', 0)
+                
+                if ai_action != 'HOLD':
+                    self.log_message(
+                        f"🟢 SIM: {ai_action} | Strategy: {ai_strategy} | "
+                        f"Confidence: {ai_confidence:.2f} | Reward: {reward:.2f}",
+                        "SUCCESS" if reward > 0 else "INFO"
+                    )
+            
+            # แสดงสรุปทุก 24 cycles (เดิม)
+            if self.current_step % 24 == 0:
+                if info:
+                    daily_volume = info.get('daily_volume', 0)
+                    total_pnl = info.get('total_pnl', 0)
+                    recovery_state = info.get('current_ai_recovery_state', 'NORMAL')
+                    
+                    status_msg = (
+                        f"🟢 SIM Status: {recovery_state} | "
+                        f"Volume: {daily_volume:.1f} | P&L: ${total_pnl:.2f}"
+                    )
+                    self.log_message(status_msg, "INFO")
+            
+            # Update GUI recovery display
+            self._update_recovery_display_from_ai_brain()
+            
+            # Check if episode done
+            if done:
+                self.log_message("📈 AI Episode completed - resetting", "INFO")
+                self.environment.reset()
+                
+        except Exception as e:
+            self.log_message(f"❌ Simulation cycle error: {e}", "ERROR")
+
+    def _create_recovery_decision_from_info(self, info):
+        """🔄 สร้าง RecoveryDecision จาก Environment Info"""
+        try:
+            from core.recovery_intelligence import RecoveryDecision, ActionType, StrategyType, RecoveryState
+            from datetime import datetime
+            
+            # แปลง action string เป็น ActionType
+            action_name = info.get('current_ai_action', 'HOLD')
+            action_type = getattr(ActionType, action_name, ActionType.HOLD)
+            
+            # แปลง strategy string เป็น StrategyType
+            strategy_name = info.get('current_ai_strategy', 'emergency_recovery').upper()
+            strategy_type = getattr(StrategyType, strategy_name, StrategyType.EMERGENCY_RECOVERY)
+            
+            # แปลง recovery state
+            recovery_state_name = info.get('current_ai_recovery_state', 'NORMAL')
+            recovery_state = getattr(RecoveryState, recovery_state_name, RecoveryState.NORMAL)
+            
+            # สร้าง RecoveryDecision
+            decision = RecoveryDecision(
+                action=action_type,
+                strategy_type=strategy_type,
+                volume=info.get('current_ai_volume', 0.01),
+                entry_price=None,
+                stop_loss=None,
+                take_profit=None,
+                recovery_state=recovery_state,
+                confidence=info.get('current_ai_confidence', 0.5),
+                reasoning=info.get('current_ai_reasoning', []),
+                warnings=info.get('current_ai_warnings', []),
+                market_context=None,
+                expected_outcome={},
+                risk_assessment={},
+                timestamp=datetime.now()
+            )
+            
+            return decision
+            
+        except Exception as e:
+            self.log_message(f"❌ Create recovery decision error: {e}", "ERROR")
+            return None
+
+    def _log_live_trading_result(self, live_result, info):
+        """📝 Log ผลการเทรดจริง"""
+        try:
+            action = live_result.action_executed.name
+            result_status = live_result.result.value
+            
+            if live_result.result == live_result.result.SUCCESS:
+                if live_result.volume_executed:
+                    message = (f"🔴 LIVE: {action} {live_result.volume_executed:.2f} lots "
+                            f"at ${live_result.execution_price:.5f}")
+                else:
+                    message = f"🔴 LIVE: {action} - {live_result.message}"
+                
+                log_level = "SUCCESS"
+                
+            elif live_result.result == live_result.result.FAILED:
+                message = f"🔴 LIVE: {action} FAILED - {live_result.message}"
+                log_level = "ERROR"
+                
+            elif live_result.result == live_result.result.REJECTED:
+                message = f"🔴 LIVE: {action} REJECTED - {live_result.message}"
+                log_level = "WARNING"
+                
+            else:
+                message = f"🔴 LIVE: {action} - {live_result.message}"
+                log_level = "INFO"
+            
+            self.log_message(message, log_level)
+            
+            # แสดง P&L หาก close positions
+            if live_result.profit_loss is not None:
+                pnl_message = f"💰 Live P&L: ${live_result.profit_loss:.2f}"
+                pnl_level = "SUCCESS" if live_result.profit_loss >= 0 else "ERROR"
+                self.log_message(pnl_message, pnl_level)
+                
+        except Exception as e:
+            self.log_message(f"❌ Log live result error: {e}", "ERROR")
+
+    def stop_trading(self):
+        """Stop live trading"""
+        try:
+            self.is_trading = False
+            self.start_trading_btn.config(state='normal')
+            self.stop_trading_btn.config(state='disabled')
+            
+            # ปิด Live Trading หากเปิดอยู่
+            if self.live_mode_enabled and self.live_trader:
+                self.disable_live_trading()
+            
+            # รีเซ็ต trading session
+            self._reset_trading_session()
+            
+            self.log_message("⏹️ Trading stopped", "INFO")
+            
+        except Exception as e:
+            self.log_message(f"❌ Stop trading error: {e}", "ERROR")
 
     def on_mode_change(self):
         """เมื่อเปลี่ยน Trading Mode"""
@@ -1489,13 +2001,20 @@ class TradingGUI:
             self.is_training = False
             self.is_trading = False
             
+            # ปิด Live Trading ทันที
+            if self.live_mode_enabled and self.live_trader:
+                self.log_message("🛑 EMERGENCY: Disabling live trading", "ERROR")
+                self.disable_live_trading()
+            
             # Close all positions if connected
             if self.is_connected and self.mt5_interface:
                 positions = self.mt5_interface.get_positions()
-                for pos in positions:
-                    self.mt5_interface.close_position(pos.get('ticket'))
+                if positions:
+                    self.log_message(f"🛑 EMERGENCY: Closing {len(positions)} positions", "ERROR")
+                    for pos in positions:
+                        self.mt5_interface.close_position(pos.get('ticket'))
             
-            # ⭐ รีเซ็ต trading session
+            # รีเซ็ต trading session
             self._reset_trading_session()
             
             self.reset_training_controls()
@@ -1507,7 +2026,7 @@ class TradingGUI:
             
         except Exception as e:
             self.log_message(f"❌ Emergency stop error: {e}", "ERROR")
-    
+
     def _reset_trading_session(self):
         """
         🔄 รีเซ็ต Trading Session
